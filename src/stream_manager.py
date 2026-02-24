@@ -102,6 +102,8 @@ class StreamInfo:
     strict_live_ts: bool = False
     # Circuit breaker - track bad upstream endpoints temporarily
     upstream_marked_bad_until: Optional[datetime] = None
+    # Track whether STREAM_STOPPED has been emitted to prevent duplicates
+    stream_stopped_emitted: bool = False
     # Sticky Session Handler - lock to specific backend origin after redirects
     # Prevents playback loops from load balancers bouncing between origins
     use_sticky_session: bool = False
@@ -542,13 +544,33 @@ class StreamManager:
                     self.streams[stream_id].connected_clients.discard(
                         client_id)
 
+            stream_metadata = self.streams[stream_id].metadata if stream_id and stream_id in self.streams else {
+            }
+
             await self._emit_event("CLIENT_DISCONNECTED", stream_id or "unknown", {
                 "client_id": client_id,
                 "connection_id": connection_id,
                 "bytes_served": client_info.bytes_served,
                 "segments_served": client_info.segments_served,
-                "metadata": self.streams[stream_id].metadata if stream_id and stream_id in self.streams else {}
+                "metadata": stream_metadata
             })
+
+            # If this was the last client on the stream, emit STREAM_STOPPED immediately
+            # so the backend can decrement profile connection counts without waiting
+            # for the periodic inactive stream cleanup task.
+            if stream_id and stream_id in self.stream_clients:
+                remaining_clients = len(self.stream_clients[stream_id])
+                if remaining_clients == 0 and stream_id in self.streams and not self.streams[stream_id].stream_stopped_emitted:
+                    logger.info(
+                        f"Last client disconnected from stream {stream_id}, emitting STREAM_STOPPED")
+                    self.streams[stream_id].stream_stopped_emitted = True
+                    await self._emit_event("STREAM_STOPPED", stream_id, {
+                        "reason": "last_client_disconnected",
+                        "client_id": client_id,
+                        "bytes_served": client_info.bytes_served,
+                        "metadata": stream_metadata
+                    })
+
             # Notify pooled manager (if any) that this client is gone so shared
             # transcoding processes can be cleaned up when no clients remain.
             if self.pooled_manager:
@@ -915,7 +937,8 @@ class StreamManager:
                                         failover_ok = await self._try_update_failover_url(stream_id, "chunk_timeout_after_retries")
                                         failover_count += 1
                                         if not failover_ok:
-                                            logger.warning(f"Failover failed for stream {stream_id}, giving up")
+                                            logger.warning(
+                                                f"Failover failed for stream {stream_id}, giving up")
                                             break
                                         # Reset retry counter for new URL
                                         retry_count = 0
@@ -1178,12 +1201,14 @@ class StreamManager:
                     if not stream_info.failover_event.is_set():
                         logger.info(
                             f"Stream completed for client {client_id}: {chunk_count} chunks, {bytes_served} bytes")
-                        await self._emit_event("STREAM_STOPPED", stream_id, {
-                            "client_id": client_id,
-                            "bytes_served": bytes_served,
-                            "chunks_served": chunk_count,
-                            "metadata": stream_info.metadata
-                        })
+                        if not stream_info.stream_stopped_emitted:
+                            stream_info.stream_stopped_emitted = True
+                            await self._emit_event("STREAM_STOPPED", stream_id, {
+                                "client_id": client_id,
+                                "bytes_served": bytes_served,
+                                "chunks_served": chunk_count,
+                                "metadata": stream_info.metadata
+                            })
                         break  # Exit the failover loop
                     # else: failover event was set, continue to next iteration
 
@@ -1242,7 +1267,8 @@ class StreamManager:
                             failover_ok = await self._try_update_failover_url(stream_id, "connection_error_after_retries")
                             failover_count += 1
                             if not failover_ok:
-                                logger.warning(f"Failover failed for stream {stream_id}, giving up")
+                                logger.warning(
+                                    f"Failover failed for stream {stream_id}, giving up")
                                 break
                             # Reset retry counter for new URL
                             retry_count = 0
@@ -1355,7 +1381,8 @@ class StreamManager:
                         failover_ok = await self._try_update_failover_url(stream_id, f"stream_error_{type(e).__name__}_after_retries")
                         failover_count += 1
                         if not failover_ok:
-                            logger.warning(f"Failover failed for stream {stream_id}, giving up")
+                            logger.warning(
+                                f"Failover failed for stream {stream_id}, giving up")
                             break
                         # Reset retry counter for new URL
                         retry_count = 0
@@ -1476,7 +1503,8 @@ class StreamManager:
                             failover_ok = await self._try_update_failover_url(stream_id, f"unknown_error_{type(e).__name__}_after_retries")
                             failover_count += 1
                             if not failover_ok:
-                                logger.warning(f"Failover failed for stream {stream_id}, giving up")
+                                logger.warning(
+                                    f"Failover failed for stream {stream_id}, giving up")
                                 break
                             # Reset retry counter for new URL
                             retry_count = 0
@@ -2824,11 +2852,13 @@ class StreamManager:
                             f"Error stopping transcoding process during cleanup: {e}")
 
                 # Emit stream_stopped event before removing the stream
-                await self._emit_event("STREAM_STOPPED", stream_id, {
-                    "reason": "inactive_timeout",
-                    "timeout_seconds": self.stream_timeout,
-                    "metadata": stream_info.metadata
-                })
+                # (skip if already emitted during client cleanup)
+                if not stream_info.stream_stopped_emitted:
+                    await self._emit_event("STREAM_STOPPED", stream_id, {
+                        "reason": "inactive_timeout",
+                        "timeout_seconds": self.stream_timeout,
+                        "metadata": stream_info.metadata
+                    })
 
                 del self.streams[stream_id]
                 if stream_id in self.stream_clients:
