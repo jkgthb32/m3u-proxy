@@ -1613,15 +1613,17 @@ async def delete_oldest_stream_by_metadata(
             for client_id in client_ids:
                 await stream_manager.cleanup_client(client_id)
 
-        # Emit stream_stopped event
-        await stream_manager._emit_event("STREAM_STOPPED", oldest_stream_id, {
-            "reason": "oldest_stream_deletion",
-            "filter_field": field,
-            "filter_value": value,
-            "was_transcoded": stream_info.is_transcoded,
-            "stream_age_seconds": (datetime.now(timezone.utc) - oldest_created_at).total_seconds() if oldest_created_at else None,
-            "metadata": stream_info.metadata
-        })
+        # Emit stream_stopped event (skip if already emitted during client cleanup)
+        if not stream_info.stream_stopped_emitted:
+            stream_info.stream_stopped_emitted = True
+            await stream_manager._emit_event("STREAM_STOPPED", oldest_stream_id, {
+                "reason": "oldest_stream_deletion",
+                "filter_field": field,
+                "filter_value": value,
+                "was_transcoded": stream_info.is_transcoded,
+                "stream_age_seconds": (datetime.now(timezone.utc) - oldest_created_at).total_seconds() if oldest_created_at else None,
+                "metadata": stream_info.metadata
+            })
 
         # Remove stream
         if oldest_stream_id in stream_manager.streams:
@@ -1702,14 +1704,16 @@ async def delete_streams_by_metadata(
                     for client_id in client_ids:
                         await stream_manager.cleanup_client(client_id)
 
-                # Emit stream_stopped event
-                await stream_manager._emit_event("STREAM_STOPPED", stream_id, {
-                    "reason": "metadata_filter_deletion",
-                    "filter_field": field,
-                    "filter_value": value,
-                    "was_transcoded": stream_info.is_transcoded,
-                    "metadata": stream_info.metadata
-                })
+                # Emit stream_stopped event (skip if already emitted during client cleanup)
+                if not stream_info.stream_stopped_emitted:
+                    stream_info.stream_stopped_emitted = True
+                    await stream_manager._emit_event("STREAM_STOPPED", stream_id, {
+                        "reason": "metadata_filter_deletion",
+                        "filter_field": field,
+                        "filter_value": value,
+                        "was_transcoded": stream_info.is_transcoded,
+                        "metadata": stream_info.metadata
+                    })
 
                 # Remove stream
                 if stream_id in stream_manager.streams:
@@ -1760,12 +1764,14 @@ async def delete_stream(stream_id: str):
             for client_id in client_ids:
                 await stream_manager.cleanup_client(client_id)
 
-        # Emit stream_stopped event before removing the stream
-        await stream_manager._emit_event("STREAM_STOPPED", stream_id, {
-            "reason": "manual_deletion",
-            "was_transcoded": stream_info.is_transcoded,
-            "metadata": stream_info.metadata
-        })
+        # Emit stream_stopped event before removing the stream (skip if already emitted during client cleanup)
+        if not stream_info.stream_stopped_emitted:
+            stream_info.stream_stopped_emitted = True
+            await stream_manager._emit_event("STREAM_STOPPED", stream_id, {
+                "reason": "manual_deletion",
+                "was_transcoded": stream_info.is_transcoded,
+                "metadata": stream_info.metadata
+            })
 
         # Remove stream
         if stream_id in stream_manager.streams:
