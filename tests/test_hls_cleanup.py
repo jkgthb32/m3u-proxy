@@ -7,7 +7,7 @@ import tempfile
 import pytest
 
 # Ensure src is on path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 @pytest.mark.asyncio
@@ -20,8 +20,8 @@ async def test_hls_shared_process_cleanup(monkeypatch, tmp_path):
 
     # Ensure grace period is small for test determinism
     try:
-        monkeypatch.setattr(psm, 'settings', psm.settings)
-        setattr(psm.settings, 'SHARED_STREAM_GRACE', 1)
+        monkeypatch.setattr(psm, "settings", psm.settings)
+        setattr(psm.settings, "SHARED_STREAM_GRACE", 1)
     except Exception:
         pass
 
@@ -30,14 +30,16 @@ async def test_hls_shared_process_cleanup(monkeypatch, tmp_path):
         # Create a per-stream hls_dir under the pytest tmp_path
         base_dir = str(tmp_path)
         os.makedirs(base_dir, exist_ok=True)
-        self.hls_dir = tempfile.mkdtemp(prefix=f"m3u_proxy_hls_{self.stream_id}_", dir=base_dir)
+        self.hls_dir = tempfile.mkdtemp(
+            prefix=f"m3u_proxy_hls_{self.stream_id}_", dir=base_dir
+        )
         # Touch an index.m3u8 file to simulate ffmpeg producing a playlist
-        with open(os.path.join(self.hls_dir, 'index.m3u8'), 'w') as fh:
-            fh.write('#EXTM3U\n')
+        with open(os.path.join(self.hls_dir, "index.m3u8"), "w") as fh:
+            fh.write("#EXTM3U\n")
 
         # Simulate a running process
         self.process = types.SimpleNamespace(pid=99999, returncode=None)
-        self.status = 'running'
+        self.status = "running"
         return True
 
     # Stub out cleanup to avoid killing real processes, but simulate directory removal
@@ -47,33 +49,40 @@ async def test_hls_shared_process_cleanup(monkeypatch, tmp_path):
                 shutil.rmtree(self.hls_dir)
         except Exception:
             pass
-        self.status = 'stopped'
+        self.status = "stopped"
 
-    monkeypatch.setattr(psm.SharedTranscodingProcess, 'start_process', fake_start)
-    monkeypatch.setattr(psm.SharedTranscodingProcess, 'cleanup', fake_cleanup)
+    monkeypatch.setattr(psm.SharedTranscodingProcess, "start_process", fake_start)
+    monkeypatch.setattr(psm.SharedTranscodingProcess, "cleanup", fake_cleanup)
 
     manager = psm.PooledStreamManager(enable_sharing=False)
 
     # Create an HLS-style ffmpeg args list so the SharedTranscodingProcess will enter hls mode
-    ffmpeg_args = ['-i', 'http://example.com/playlist.m3u8', '-c:v', 'libx264', '-f', 'hls']
+    ffmpeg_args = [
+        "-i",
+        "http://example.com/playlist.m3u8",
+        "-c:v",
+        "libx264",
+        "-f",
+        "hls",
+    ]
 
     # Create shared stream and register one client
     stream_key, proc = await manager.get_or_create_shared_stream(
-        url='http://example.com/playlist.m3u8',
-        profile='custom',
+        url="http://example.com/playlist.m3u8",
+        profile="custom",
         ffmpeg_args=ffmpeg_args,
-        client_id='client_test_1',
-        user_agent='pytest',
+        client_id="client_test_1",
+        user_agent="pytest",
         headers=None,
     )
 
     assert stream_key in manager.shared_processes
     shared = manager.shared_processes[stream_key]
-    assert shared.status == 'running'
+    assert shared.status == "running"
     assert os.path.isdir(shared.hls_dir)
 
     # Now remove the client. This should schedule a delayed cleanup (grace period)
-    await manager.remove_client_from_stream('client_test_1')
+    await manager.remove_client_from_stream("client_test_1")
 
     # Wait longer than the grace period used by manager._delayed_cleanup_if_empty (default 1s)
     await asyncio.sleep(2.0)

@@ -11,6 +11,7 @@ except ImportError:
     class MockSettings:
         DEFAULT_RETRY_ATTEMPTS = 3
         DEFAULT_RETRY_DELAY = 5
+
     settings = MockSettings()
 
 

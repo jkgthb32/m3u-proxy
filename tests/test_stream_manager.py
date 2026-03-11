@@ -1,20 +1,14 @@
-from stream_manager import (
-    StreamManager,
-    ClientInfo,
-    StreamInfo,
-    ProxyStats,
-    M3U8Processor
-)
+from stream_manager import StreamManager, ClientInfo, StreamInfo, M3U8Processor
 import pytest
 import asyncio
 from datetime import datetime, timezone
 from unittest.mock import Mock, AsyncMock, patch
-import httpx
 
 # Add src to path so we can import our modules
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 class TestClientInfo:
@@ -24,7 +18,7 @@ class TestClientInfo:
         client = ClientInfo(
             client_id="test_client",
             created_at=datetime.now(timezone.utc),
-            last_access=datetime.now(timezone.utc)
+            last_access=datetime.now(timezone.utc),
         )
         assert client.client_id == "test_client"
         assert client.bytes_served == 0
@@ -40,7 +34,7 @@ class TestStreamInfo:
             stream_id="test_stream",
             original_url="http://example.com/stream.m3u8",
             created_at=datetime.now(timezone.utc),
-            last_access=datetime.now(timezone.utc)
+            last_access=datetime.now(timezone.utc),
         )
         assert stream.stream_id == "test_stream"
         assert stream.original_url == "http://example.com/stream.m3u8"
@@ -73,6 +67,7 @@ segment2.ts
 
     def test_rewrite_absolute_urls(self):
         from urllib.parse import quote
+
         processor = M3U8Processor("http://original.com/", "stream123")
 
         playlist = """#EXTM3U
@@ -83,15 +78,20 @@ http://original.com/segment2.ts"""
 
         proxy_base_url = "http://proxy.com/hls/stream123"
         result = processor.process_playlist(
-            playlist, proxy_base_url, "http://original.com/")
+            playlist, proxy_base_url, "http://original.com/"
+        )
 
         # Verify that the segment URLs are correctly rewritten and encoded, .ts added back
-        encoded_segment1 = quote("http://original.com/segment1.ts", safe='')
-        expected_url1 = f"{proxy_base_url}/segment.ts?url={encoded_segment1}&client_id=stream123"
+        encoded_segment1 = quote("http://original.com/segment1.ts", safe="")
+        expected_url1 = (
+            f"{proxy_base_url}/segment.ts?url={encoded_segment1}&client_id=stream123"
+        )
         assert expected_url1 in result
 
-        encoded_segment2 = quote("http://original.com/segment2.ts", safe='')
-        expected_url2 = f"{proxy_base_url}/segment.ts?url={encoded_segment2}&client_id=stream123"
+        encoded_segment2 = quote("http://original.com/segment2.ts", safe="")
+        expected_url2 = (
+            f"{proxy_base_url}/segment.ts?url={encoded_segment2}&client_id=stream123"
+        )
         assert expected_url2 in result
 
 
@@ -124,14 +124,11 @@ class TestStreamManager:
     @pytest.mark.asyncio
     async def test_create_stream(self, stream_manager):
         url = "http://example.com/test.m3u8"
-        failover_urls = ["http://backup1.com/test.m3u8",
-                         "http://backup2.com/test.m3u8"]
+        failover_urls = ["http://backup1.com/test.m3u8", "http://backup2.com/test.m3u8"]
         user_agent = "TestAgent/1.0"
 
         stream_id = await stream_manager.get_or_create_stream(
-            url,
-            failover_urls=failover_urls,
-            user_agent=user_agent
+            url, failover_urls=failover_urls, user_agent=user_agent
         )
 
         assert stream_id is not None
@@ -175,7 +172,7 @@ class TestStreamManager:
             client_id=client_id,
             stream_id=stream_id,
             user_agent="TestClient/1.0",
-            ip_address="127.0.0.1"
+            ip_address="127.0.0.1",
         )
 
         assert client_info is not None
@@ -200,7 +197,7 @@ class TestStreamManager:
             client_id=client_id,
             stream_id=stream_id,
             user_agent="TestClient/1.0",
-            ip_address="127.0.0.1"
+            ip_address="127.0.0.1",
         )
 
         # Mock httpx client for segment request
@@ -213,18 +210,17 @@ class TestStreamManager:
 
         mock_response.aiter_bytes = mock_aiter_bytes
 
-        with patch.object(stream_manager, 'http_client') as mock_client:
+        with patch.object(stream_manager, "http_client") as mock_client:
             mock_client.stream.return_value.__aenter__.return_value = mock_response
 
             # Test the actual API method
             response = await stream_manager.proxy_hls_segment(
-                stream_id,
-                client_id,
-                "http://example.com/segment1.ts"
+                stream_id, client_id, "http://example.com/segment1.ts"
             )
 
             # Response should be a StreamingResponse
             from fastapi.responses import StreamingResponse
+
             assert isinstance(response, StreamingResponse)
 
     @pytest.mark.asyncio
@@ -238,7 +234,7 @@ class TestStreamManager:
             client_id=client_id,
             stream_id=stream_id,
             user_agent="TestClient/1.0",
-            ip_address="127.0.0.1"
+            ip_address="127.0.0.1",
         )
 
         playlist_content = """#EXTM3U
@@ -249,16 +245,13 @@ segment1.ts"""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = playlist_content
-        mock_response.headers = {
-            "content-type": "application/vnd.apple.mpegurl"}
+        mock_response.headers = {"content-type": "application/vnd.apple.mpegurl"}
 
-        with patch.object(stream_manager, 'http_client') as mock_client:
+        with patch.object(stream_manager, "http_client") as mock_client:
             mock_client.get = AsyncMock(return_value=mock_response)
 
             result = await stream_manager.get_playlist_content(
-                stream_id,
-                client_id,
-                "http://proxy.com"
+                stream_id, client_id, "http://proxy.com"
             )
 
             assert result is not None
@@ -271,8 +264,7 @@ segment1.ts"""
         failover_urls = ["http://backup.com/test.m3u8"]
 
         stream_id = await stream_manager.get_or_create_stream(
-            url,
-            failover_urls=failover_urls
+            url, failover_urls=failover_urls
         )
 
         # Check failover URLs were set

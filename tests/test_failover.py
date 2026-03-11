@@ -8,19 +8,20 @@ Tests cover:
 - FFmpeg input error detection
 - Automatic failover triggering
 """
+
 from pooled_stream_manager import PooledStreamManager, SharedTranscodingProcess
 from stream_manager import StreamManager
 import pytest
 import pytest_asyncio
 import asyncio
 import httpx
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from datetime import datetime, timezone
+from unittest.mock import Mock, AsyncMock, patch
+from datetime import datetime
 import sys
 import os
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 class TestHLSPlaylistFailover:
@@ -32,7 +33,7 @@ class TestHLSPlaylistFailover:
         manager = StreamManager()
         yield manager
         # Cleanup
-        if hasattr(manager, '_running'):
+        if hasattr(manager, "_running"):
             manager._running = False
 
     @pytest.mark.asyncio
@@ -43,8 +44,7 @@ class TestHLSPlaylistFailover:
 
         # Create stream with failover
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=[failover_url]
+            primary_url, failover_urls=[failover_url]
         )
 
         stream_info = stream_manager.streams[stream_id]
@@ -55,8 +55,7 @@ class TestHLSPlaylistFailover:
         # Mock HTTP client to simulate primary failure and backup success
         mock_response_backup = Mock()
         mock_response_backup.status_code = 200
-        mock_response_backup.headers = {
-            'content-type': 'application/vnd.apple.mpegurl'}
+        mock_response_backup.headers = {"content-type": "application/vnd.apple.mpegurl"}
         mock_response_backup.url = failover_url
         mock_response_backup.text = """#EXTM3U
 #EXT-X-VERSION:3
@@ -66,18 +65,16 @@ segment1.ts
 #EXT-X-ENDLIST"""
         mock_response_backup.raise_for_status = Mock()
 
-        with patch.object(stream_manager.http_client, 'get') as mock_get:
+        with patch.object(stream_manager.http_client, "get") as mock_get:
             # First call fails (primary), second call succeeds (failover)
             mock_get.side_effect = [
                 httpx.ConnectError("DNS resolution failed"),
-                mock_response_backup
+                mock_response_backup,
             ]
 
             # Attempt to get playlist content
             content = await stream_manager.get_playlist_content(
-                stream_id,
-                "test_client",
-                "http://proxy.com/hls/test"
+                stream_id, "test_client", "http://proxy.com/hls/test"
             )
 
             # Should have triggered failover and returned content
@@ -96,22 +93,19 @@ segment1.ts
         primary_url = "http://primary.example.com/playlist.m3u8"
         failover_urls = [
             "http://backup1.example.com/playlist.m3u8",
-            "http://backup2.example.com/playlist.m3u8"
+            "http://backup2.example.com/playlist.m3u8",
         ]
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=failover_urls
+            primary_url, failover_urls=failover_urls
         )
 
-        with patch.object(stream_manager.http_client, 'get') as mock_get:
+        with patch.object(stream_manager.http_client, "get") as mock_get:
             # All URLs fail
             mock_get.side_effect = httpx.ConnectError("All connections failed")
 
             content = await stream_manager.get_playlist_content(
-                stream_id,
-                "test_client",
-                "http://proxy.com/hls/test"
+                stream_id, "test_client", "http://proxy.com/hls/test"
             )
 
             # Should return None after all attempts exhausted
@@ -128,28 +122,21 @@ segment1.ts
         failover_url = "http://backup.example.com/playlist.m3u8"
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=[failover_url]
+            primary_url, failover_urls=[failover_url]
         )
 
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.headers = {
-            'content-type': 'application/vnd.apple.mpegurl'}
+        mock_response.headers = {"content-type": "application/vnd.apple.mpegurl"}
         mock_response.url = failover_url
         mock_response.text = "#EXTM3U\n#EXTINF:10.0,\nsegment.ts"
         mock_response.raise_for_status = Mock()
 
-        with patch.object(stream_manager.http_client, 'get') as mock_get:
-            mock_get.side_effect = [
-                httpx.ConnectError("Primary failed"),
-                mock_response
-            ]
+        with patch.object(stream_manager.http_client, "get") as mock_get:
+            mock_get.side_effect = [httpx.ConnectError("Primary failed"), mock_response]
 
             content = await stream_manager.get_playlist_content(
-                stream_id,
-                "test_client",
-                "http://proxy.com/hls/test"
+                stream_id, "test_client", "http://proxy.com/hls/test"
             )
 
             # Should return HLS content, not redirect marker
@@ -169,7 +156,7 @@ class TestDirectStreamFailover:
     async def stream_manager(self):
         manager = StreamManager()
         yield manager
-        if hasattr(manager, '_running'):
+        if hasattr(manager, "_running"):
             manager._running = False
 
     @pytest.mark.asyncio
@@ -179,8 +166,7 @@ class TestDirectStreamFailover:
         failover_url = "http://backup.example.com/stream.ts"
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=[failover_url]
+            primary_url, failover_urls=[failover_url]
         )
 
         stream_info = stream_manager.streams[stream_id]
@@ -195,8 +181,7 @@ class TestDirectStreamFailover:
         failover_url = "http://backup.example.com/stream.ts"
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=[failover_url]
+            primary_url, failover_urls=[failover_url]
         )
 
         # Manually trigger failover
@@ -208,18 +193,19 @@ class TestDirectStreamFailover:
         assert stream_info.failover_attempts == 1
 
     @pytest.mark.asyncio
-    async def test_direct_stream_reconnect_recovers_from_redirect_502(self, stream_manager, monkeypatch):
+    async def test_direct_stream_reconnect_recovers_from_redirect_502(
+        self, stream_manager, monkeypatch
+    ):
         """Regression: sticky redirected origin returns 502, proxy recovers to entry URL and reconnects."""
         primary_url = "http://provider.example.com/live/channel.ts"
         sticky_redirect_url = "http://edge-2.provider.example.com/live/channel.ts"
 
         # Force immediate sticky-origin recovery path (no same-URL retry loop)
-        monkeypatch.setattr('config.settings.STREAM_RETRY_ATTEMPTS', 0)
-        monkeypatch.setattr('config.settings.STREAM_TOTAL_TIMEOUT', 5.0)
+        monkeypatch.setattr("config.settings.STREAM_RETRY_ATTEMPTS", 0)
+        monkeypatch.setattr("config.settings.STREAM_TOTAL_TIMEOUT", 5.0)
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            use_sticky_session=True
+            primary_url, use_sticky_session=True
         )
         stream_info = stream_manager.streams[stream_id]
 
@@ -241,7 +227,12 @@ class TestDirectStreamFailover:
                 return self.chunk
 
         class _MockResponse:
-            def __init__(self, status_code: int, chunk: bytes | None = None, request_url: str = "http://example.com"):
+            def __init__(
+                self,
+                status_code: int,
+                chunk: bytes | None = None,
+                request_url: str = "http://example.com",
+            ):
                 self.status_code = status_code
                 self.headers = {"content-type": "video/mp2t"}
                 self._chunk = chunk
@@ -250,12 +241,11 @@ class TestDirectStreamFailover:
             def raise_for_status(self):
                 if self.status_code >= 400:
                     request = httpx.Request("GET", self._request_url)
-                    response = httpx.Response(
-                        self.status_code, request=request)
+                    response = httpx.Response(self.status_code, request=request)
                     raise httpx.HTTPStatusError(
                         f"{self.status_code} Bad Gateway",
                         request=request,
-                        response=response
+                        response=response,
                     )
 
             def aiter_bytes(self, chunk_size=32768):
@@ -283,10 +273,11 @@ class TestDirectStreamFailover:
                 return _MockStreamCM(_MockResponse(200, chunk=b"ok", request_url=url))
             return _MockStreamCM(_MockResponse(500, request_url=url))
 
-        monkeypatch.setattr(
-            stream_manager.live_stream_client, 'stream', fake_stream)
+        monkeypatch.setattr(stream_manager.live_stream_client, "stream", fake_stream)
 
-        response = await stream_manager.stream_continuous_direct(stream_id, 'test_client')
+        response = await stream_manager.stream_continuous_direct(
+            stream_id, "test_client"
+        )
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk)
@@ -298,18 +289,19 @@ class TestDirectStreamFailover:
         assert stream_info.current_url is None
 
     @pytest.mark.asyncio
-    async def test_direct_stream_reconnect_recovers_after_retry_exhaustion(self, stream_manager, monkeypatch):
+    async def test_direct_stream_reconnect_recovers_after_retry_exhaustion(
+        self, stream_manager, monkeypatch
+    ):
         """Regression: with retries enabled, sticky redirect 502 exhausts retries then recovers to entry URL."""
         primary_url = "http://provider.example.com/live/channel.ts"
         sticky_redirect_url = "http://edge-2.provider.example.com/live/channel.ts"
 
-        monkeypatch.setattr('config.settings.STREAM_RETRY_ATTEMPTS', 2)
-        monkeypatch.setattr('config.settings.STREAM_RETRY_DELAY', 0.0)
-        monkeypatch.setattr('config.settings.STREAM_TOTAL_TIMEOUT', 5.0)
+        monkeypatch.setattr("config.settings.STREAM_RETRY_ATTEMPTS", 2)
+        monkeypatch.setattr("config.settings.STREAM_RETRY_DELAY", 0.0)
+        monkeypatch.setattr("config.settings.STREAM_TOTAL_TIMEOUT", 5.0)
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            use_sticky_session=True
+            primary_url, use_sticky_session=True
         )
         stream_info = stream_manager.streams[stream_id]
         stream_info.current_url = sticky_redirect_url
@@ -329,7 +321,12 @@ class TestDirectStreamFailover:
                 return self.chunk
 
         class _MockResponse:
-            def __init__(self, status_code: int, chunk: bytes | None = None, request_url: str = "http://example.com"):
+            def __init__(
+                self,
+                status_code: int,
+                chunk: bytes | None = None,
+                request_url: str = "http://example.com",
+            ):
                 self.status_code = status_code
                 self.headers = {"content-type": "video/mp2t"}
                 self._chunk = chunk
@@ -338,12 +335,11 @@ class TestDirectStreamFailover:
             def raise_for_status(self):
                 if self.status_code >= 400:
                     request = httpx.Request("GET", self._request_url)
-                    response = httpx.Response(
-                        self.status_code, request=request)
+                    response = httpx.Response(self.status_code, request=request)
                     raise httpx.HTTPStatusError(
                         f"{self.status_code} Bad Gateway",
                         request=request,
-                        response=response
+                        response=response,
                     )
 
             def aiter_bytes(self, chunk_size=32768):
@@ -368,21 +364,27 @@ class TestDirectStreamFailover:
             if url == sticky_redirect_url:
                 return _MockStreamCM(_MockResponse(502, request_url=url))
             if url == primary_url:
-                return _MockStreamCM(_MockResponse(200, chunk=b"ok-retry", request_url=url))
+                return _MockStreamCM(
+                    _MockResponse(200, chunk=b"ok-retry", request_url=url)
+                )
             return _MockStreamCM(_MockResponse(500, request_url=url))
 
-        monkeypatch.setattr(
-            stream_manager.live_stream_client, 'stream', fake_stream)
+        monkeypatch.setattr(stream_manager.live_stream_client, "stream", fake_stream)
 
-        response = await stream_manager.stream_continuous_direct(stream_id, 'test_client_retry')
+        response = await stream_manager.stream_continuous_direct(
+            stream_id, "test_client_retry"
+        )
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk)
 
         assert chunks == [b"ok-retry"]
         # Two retries on sticky URL + initial attempt = 3 calls, then recovery call to primary
-        assert called_urls[:3] == [sticky_redirect_url,
-                                   sticky_redirect_url, sticky_redirect_url]
+        assert called_urls[:3] == [
+            sticky_redirect_url,
+            sticky_redirect_url,
+            sticky_redirect_url,
+        ]
         assert called_urls[3] == primary_url
         assert stream_info.current_url is None
 
@@ -397,7 +399,7 @@ class TestTranscodingFailover:
         # Mock the pooled manager
         manager.pooled_manager = Mock(spec=PooledStreamManager)
         yield manager
-        if hasattr(manager, '_running'):
+        if hasattr(manager, "_running"):
             manager._running = False
 
     @pytest.mark.asyncio
@@ -411,7 +413,7 @@ class TestTranscodingFailover:
             failover_urls=[failover_url],
             is_transcoded=True,
             transcode_profile="h264_720p",
-            transcode_ffmpeg_args=["-c:v", "libx264"]
+            transcode_ffmpeg_args=["-c:v", "libx264"],
         )
 
         # Create a mock shared process with input_failed status
@@ -435,7 +437,7 @@ class TestTranscodingFailover:
         stream_manager.pooled_manager.get_or_create_shared_stream = AsyncMock(
             side_effect=[
                 ("stream_key_1", mock_process),
-                ("stream_key_2", mock_good_process)
+                ("stream_key_2", mock_good_process),
             ]
         )
         stream_manager.pooled_manager.force_stop_stream = AsyncMock()
@@ -468,14 +470,14 @@ class TestFFmpegErrorPatterns:
             assert any(
                 pattern in error_msg.lower()
                 for pattern in [
-                    'error opening input',
-                    'failed to resolve hostname',
-                    'connection refused',
-                    'connection timed out',
-                    'server returned 4',
-                    'server returned 5',
-                    'invalid data found',
-                    'protocol not found',
+                    "error opening input",
+                    "failed to resolve hostname",
+                    "connection refused",
+                    "connection timed out",
+                    "server returned 4",
+                    "server returned 5",
+                    "invalid data found",
+                    "protocol not found",
                 ]
             )
 
@@ -487,7 +489,7 @@ class TestFFmpegErrorPatterns:
             url="http://example.com/stream.m3u8",
             profile="test",
             ffmpeg_args=["-i", "{input_url}", "-c", "copy", "pipe:1"],
-            user_agent="test-agent"
+            user_agent="test-agent",
         )
 
         # Mock the process and stderr
@@ -517,7 +519,7 @@ class TestFailoverStats:
     async def stream_manager(self):
         manager = StreamManager()
         yield manager
-        if hasattr(manager, '_running'):
+        if hasattr(manager, "_running"):
             manager._running = False
 
     @pytest.mark.asyncio
@@ -527,8 +529,7 @@ class TestFailoverStats:
         failover_url = "http://backup.example.com/stream.ts"
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=[failover_url]
+            primary_url, failover_urls=[failover_url]
         )
 
         stream_info = stream_manager.streams[stream_id]
@@ -549,12 +550,11 @@ class TestFailoverStats:
         failover_urls = [
             "http://backup1.example.com/stream.ts",
             "http://backup2.example.com/stream.ts",
-            "http://backup3.example.com/stream.ts"
+            "http://backup3.example.com/stream.ts",
         ]
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=failover_urls
+            primary_url, failover_urls=failover_urls
         )
 
         stream_info = stream_manager.streams[stream_id]
@@ -569,7 +569,9 @@ class TestFailoverStats:
 
         # Trigger multiple failovers
         for i, (expected_url, expected_index) in enumerate(expected_sequence):
-            result = await stream_manager._try_update_failover_url(stream_id, f"attempt_{i}")
+            result = await stream_manager._try_update_failover_url(
+                stream_id, f"attempt_{i}"
+            )
             assert result is True
             assert stream_info.current_url == expected_url
             assert stream_info.current_failover_index == expected_index
@@ -591,7 +593,7 @@ class TestFailoverIntegration:
     async def stream_manager(self):
         manager = StreamManager()
         yield manager
-        if hasattr(manager, '_running'):
+        if hasattr(manager, "_running"):
             manager._running = False
 
     @pytest.mark.asyncio
@@ -614,8 +616,7 @@ class TestFailoverIntegration:
         failover_url = "http://backup.example.com/stream.ts"
 
         stream_id = await stream_manager.get_or_create_stream(
-            primary_url,
-            failover_urls=[failover_url]
+            primary_url, failover_urls=[failover_url]
         )
 
         stream_info = stream_manager.streams[stream_id]

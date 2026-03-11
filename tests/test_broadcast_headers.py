@@ -1,4 +1,3 @@
-import pytest
 from src.broadcast_manager import BroadcastConfig, NetworkBroadcastProcess
 
 
@@ -6,7 +5,7 @@ def test_custom_headers_in_ffmpeg_command():
     config = BroadcastConfig(
         network_id="testnet",
         stream_url="http://example.com/start.m3u8",
-        headers={"X-Test-Header": "hello", "User-Agent": "m3u-proxy-test"}
+        headers={"X-Test-Header": "hello", "User-Agent": "m3u-proxy-test"},
     )
 
     proc = NetworkBroadcastProcess(config, hls_base_dir="/tmp")

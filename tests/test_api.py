@@ -6,10 +6,10 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import Mock, AsyncMock, patch
-import json
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 class TestHelperFunctions:
@@ -18,8 +18,7 @@ class TestHelperFunctions:
     def test_get_content_type(self):
         assert get_content_type("test.ts") == "video/mp2t"
         assert get_content_type("test?profile=pass") == "video/mp2t"
-        assert get_content_type(
-            "playlist.m3u8") == "application/vnd.apple.mpegurl"
+        assert get_content_type("playlist.m3u8") == "application/vnd.apple.mpegurl"
         assert get_content_type("video.mp4") == "video/mp4"
         assert get_content_type("video.mkv") == "video/x-matroska"
         assert get_content_type("video.webm") == "video/webm"
@@ -45,39 +44,44 @@ class TestAPI:
 
     @pytest.fixture
     def mock_stream_manager(self):
-        with patch('api.stream_manager') as mock:
+        with patch("api.stream_manager") as mock:
             # Mock the streams dict to include test_stream_123
             mock.streams = {"test_stream_123": Mock()}
 
-            mock.get_or_create_stream = AsyncMock(
-                return_value="test_stream_123")
-            mock.get_stream_info = Mock(return_value=Mock(
-                stream_id="test_stream_123",
-                original_url="http://example.com/test.m3u8",
-                is_active=True,
-                client_count=1,
-                error_count=0
-            ))
-            mock.get_stats = Mock(return_value={
-                "proxy_stats": {
-                    "total_streams": 1,
-                    "active_streams": 1,
-                    "total_clients": 0,
-                    "active_clients": 0,
-                    "total_bytes_served": 0,
-                    "total_segments_served": 0,
-                    "uptime_seconds": 3600
-                },
-                "streams": [{
-                    "stream_id": "test_stream_123",
-                    "original_url": "http://example.com/test.m3u8",
-                    "is_active": True,
-                    "client_count": 1,
-                    "error_count": 0,
-                    "uptime": 3600
-                }],
-                "clients": []
-            })
+            mock.get_or_create_stream = AsyncMock(return_value="test_stream_123")
+            mock.get_stream_info = Mock(
+                return_value=Mock(
+                    stream_id="test_stream_123",
+                    original_url="http://example.com/test.m3u8",
+                    is_active=True,
+                    client_count=1,
+                    error_count=0,
+                )
+            )
+            mock.get_stats = Mock(
+                return_value={
+                    "proxy_stats": {
+                        "total_streams": 1,
+                        "active_streams": 1,
+                        "total_clients": 0,
+                        "active_clients": 0,
+                        "total_bytes_served": 0,
+                        "total_segments_served": 0,
+                        "uptime_seconds": 3600,
+                    },
+                    "streams": [
+                        {
+                            "stream_id": "test_stream_123",
+                            "original_url": "http://example.com/test.m3u8",
+                            "is_active": True,
+                            "client_count": 1,
+                            "error_count": 0,
+                            "uptime": 3600,
+                        }
+                    ],
+                    "clients": [],
+                }
+            )
             mock.get_all_streams = Mock(return_value=[])
             mock.get_all_clients = Mock(return_value=[])
             yield mock
@@ -101,7 +105,7 @@ class TestAPI:
         payload = {
             "url": "http://example.com/stream.m3u8",
             "failover_urls": ["http://backup.com/stream.m3u8"],
-            "user_agent": "TestApp/1.0"
+            "user_agent": "TestApp/1.0",
         }
 
         response = client.post("/streams", json=payload)
@@ -126,8 +130,8 @@ class TestAPI:
             "url": "http://example.com/stream.m3u8",
             "headers": {
                 "X-Custom-Header": "TestValue",
-                "Authorization": "Bearer token"
-            }
+                "Authorization": "Bearer token",
+            },
         }
 
         response = client.post("/streams", json=payload)
@@ -136,7 +140,7 @@ class TestAPI:
         # Verify that the stream manager's get_or_create_stream was called with the headers
         mock_stream_manager.get_or_create_stream.assert_called_once()
         call_args = mock_stream_manager.get_or_create_stream.call_args
-        assert call_args.kwargs['headers'] == payload['headers']
+        assert call_args.kwargs["headers"] == payload["headers"]
 
     def test_create_stream_post_invalid_url(self, client):
         payload = {"url": "not_a_valid_url"}
@@ -174,10 +178,8 @@ class TestAPI:
     def test_delete_stream_exists(self, client, mock_stream_manager):
         mock_stream_manager.cleanup_client = AsyncMock()
         mock_stream_manager._emit_event = AsyncMock()
-        mock_stream_manager.stream_clients = {'test_stream_123': {'client1'}}
-        mock_stream_manager.streams = {
-            'test_stream_123': Mock(is_transcoded=False)
-        }
+        mock_stream_manager.stream_clients = {"test_stream_123": {"client1"}}
+        mock_stream_manager.streams = {"test_stream_123": Mock(is_transcoded=False)}
 
         response = client.delete("/streams/test_stream_123")
         assert response.status_code == 200
@@ -201,7 +203,8 @@ class TestAPI:
     def test_playlist_endpoint(self, client, mock_stream_manager):
         # Mock the get_playlist_content method used by the endpoint
         mock_stream_manager.get_playlist_content = AsyncMock(
-            return_value="#EXTM3U\nsegment1.ts")
+            return_value="#EXTM3U\nsegment1.ts"
+        )
         mock_stream_manager.register_client = AsyncMock(return_value=Mock())
         mock_stream_manager.clients = {}
 
@@ -225,13 +228,14 @@ class TestAPI:
             yield b"segment_data_chunk_2"
 
         mock_response = StreamingResponse(
-            mock_response_generator(), media_type="video/mp2t")
-        mock_stream_manager.proxy_hls_segment = AsyncMock(
-            return_value=mock_response)
+            mock_response_generator(), media_type="video/mp2t"
+        )
+        mock_stream_manager.proxy_hls_segment = AsyncMock(return_value=mock_response)
         mock_stream_manager.register_client = AsyncMock(return_value=Mock())
 
         response = client.get(
-            "/hls/test_stream_123/segment?client_id=test_client&url=http://example.com/segment1.ts")
+            "/hls/test_stream_123/segment?client_id=test_client&url=http://example.com/segment1.ts"
+        )
         assert response.status_code == 200
         # Note: In tests, the media_type might not be set exactly as expected
 
@@ -250,13 +254,14 @@ class TestAPI:
 
         # Mock the stream_continuous_direct method used by the endpoint
         mock_response = StreamingResponse(
-            mock_stream_generator(), media_type="video/mp4")
+            mock_stream_generator(), media_type="video/mp4"
+        )
 
         # Create proper async mocks that accept any arguments
         mock_stream_manager.stream_continuous_direct = AsyncMock(
-            return_value=mock_response)
-        mock_stream_manager.stream_transcoded = AsyncMock(
-            return_value=mock_response)
+            return_value=mock_response
+        )
+        mock_stream_manager.stream_transcoded = AsyncMock(return_value=mock_response)
         mock_stream_manager.register_client = AsyncMock(return_value=None)
         mock_stream_manager.unregister_client = AsyncMock(return_value=None)
         mock_stream_manager.get_stream_info = Mock(return_value=None)
@@ -272,13 +277,12 @@ class TestAPI:
         primary_url = "http://provider.example.com/live/channel.ts"
         sticky_redirect_url = "http://edge-2.provider.example.com/live/channel.ts"
 
-        monkeypatch.setattr('config.settings.STREAM_RETRY_ATTEMPTS', 0)
-        monkeypatch.setattr('config.settings.STREAM_TOTAL_TIMEOUT', 5.0)
+        monkeypatch.setattr("config.settings.STREAM_RETRY_ATTEMPTS", 0)
+        monkeypatch.setattr("config.settings.STREAM_TOTAL_TIMEOUT", 5.0)
 
-        stream_id = asyncio.run(manager.get_or_create_stream(
-            primary_url,
-            use_sticky_session=True
-        ))
+        stream_id = asyncio.run(
+            manager.get_or_create_stream(primary_url, use_sticky_session=True)
+        )
         stream_info = manager.streams[stream_id]
         stream_info.current_url = sticky_redirect_url
 
@@ -297,7 +301,12 @@ class TestAPI:
                 return self.chunk
 
         class _MockResponse:
-            def __init__(self, status_code: int, chunk: bytes | None = None, request_url: str = "http://example.com"):
+            def __init__(
+                self,
+                status_code: int,
+                chunk: bytes | None = None,
+                request_url: str = "http://example.com",
+            ):
                 self.status_code = status_code
                 self.headers = {"content-type": "video/mp2t"}
                 self._chunk = chunk
@@ -306,12 +315,11 @@ class TestAPI:
             def raise_for_status(self):
                 if self.status_code >= 400:
                     request = httpx.Request("GET", self._request_url)
-                    response = httpx.Response(
-                        self.status_code, request=request)
+                    response = httpx.Response(self.status_code, request=request)
                     raise httpx.HTTPStatusError(
                         f"{self.status_code} Bad Gateway",
                         request=request,
-                        response=response
+                        response=response,
                     )
 
             def aiter_bytes(self, chunk_size=32768):
@@ -336,13 +344,15 @@ class TestAPI:
             if url == sticky_redirect_url:
                 return _MockStreamCM(_MockResponse(502, request_url=url))
             if url == primary_url:
-                return _MockStreamCM(_MockResponse(200, chunk=b"ok-api", request_url=url))
+                return _MockStreamCM(
+                    _MockResponse(200, chunk=b"ok-api", request_url=url)
+                )
             return _MockStreamCM(_MockResponse(500, request_url=url))
 
-        monkeypatch.setattr(manager.live_stream_client, 'stream', fake_stream)
+        monkeypatch.setattr(manager.live_stream_client, "stream", fake_stream)
 
         try:
-            with patch('api.stream_manager', manager):
+            with patch("api.stream_manager", manager):
                 client = TestClient(app)
                 response = client.get(f"/stream/{stream_id}")
 
@@ -361,14 +371,13 @@ class TestAPI:
         primary_url = "http://provider.example.com/live/channel.ts"
         sticky_redirect_url = "http://edge-2.provider.example.com/live/channel.ts"
 
-        monkeypatch.setattr('config.settings.STREAM_RETRY_ATTEMPTS', 2)
-        monkeypatch.setattr('config.settings.STREAM_RETRY_DELAY', 0.0)
-        monkeypatch.setattr('config.settings.STREAM_TOTAL_TIMEOUT', 5.0)
+        monkeypatch.setattr("config.settings.STREAM_RETRY_ATTEMPTS", 2)
+        monkeypatch.setattr("config.settings.STREAM_RETRY_DELAY", 0.0)
+        monkeypatch.setattr("config.settings.STREAM_TOTAL_TIMEOUT", 5.0)
 
-        stream_id = asyncio.run(manager.get_or_create_stream(
-            primary_url,
-            use_sticky_session=True
-        ))
+        stream_id = asyncio.run(
+            manager.get_or_create_stream(primary_url, use_sticky_session=True)
+        )
         stream_info = manager.streams[stream_id]
         stream_info.current_url = sticky_redirect_url
 
@@ -387,7 +396,12 @@ class TestAPI:
                 return self.chunk
 
         class _MockResponse:
-            def __init__(self, status_code: int, chunk: bytes | None = None, request_url: str = "http://example.com"):
+            def __init__(
+                self,
+                status_code: int,
+                chunk: bytes | None = None,
+                request_url: str = "http://example.com",
+            ):
                 self.status_code = status_code
                 self.headers = {"content-type": "video/mp2t"}
                 self._chunk = chunk
@@ -396,12 +410,11 @@ class TestAPI:
             def raise_for_status(self):
                 if self.status_code >= 400:
                     request = httpx.Request("GET", self._request_url)
-                    response = httpx.Response(
-                        self.status_code, request=request)
+                    response = httpx.Response(self.status_code, request=request)
                     raise httpx.HTTPStatusError(
                         f"{self.status_code} Bad Gateway",
                         request=request,
-                        response=response
+                        response=response,
                     )
 
             def aiter_bytes(self, chunk_size=32768):
@@ -426,20 +439,25 @@ class TestAPI:
             if url == sticky_redirect_url:
                 return _MockStreamCM(_MockResponse(502, request_url=url))
             if url == primary_url:
-                return _MockStreamCM(_MockResponse(200, chunk=b"ok-api-retry", request_url=url))
+                return _MockStreamCM(
+                    _MockResponse(200, chunk=b"ok-api-retry", request_url=url)
+                )
             return _MockStreamCM(_MockResponse(500, request_url=url))
 
-        monkeypatch.setattr(manager.live_stream_client, 'stream', fake_stream)
+        monkeypatch.setattr(manager.live_stream_client, "stream", fake_stream)
 
         try:
-            with patch('api.stream_manager', manager):
+            with patch("api.stream_manager", manager):
                 client = TestClient(app)
                 response = client.get(f"/stream/{stream_id}")
 
             assert response.status_code == 200
             assert response.content == b"ok-api-retry"
-            assert called_urls[:3] == [sticky_redirect_url,
-                                       sticky_redirect_url, sticky_redirect_url]
+            assert called_urls[:3] == [
+                sticky_redirect_url,
+                sticky_redirect_url,
+                sticky_redirect_url,
+            ]
             assert called_urls[3] == primary_url
             assert stream_info.current_url is None
         finally:
@@ -455,10 +473,11 @@ class TestAPI:
         assert "active_streams" in data
         assert "total_clients" in data
 
-    @patch('api.stream_manager')
+    @patch("api.stream_manager")
     def test_error_handling_stream_creation_failure(self, mock_sm, client):
         mock_sm.get_or_create_stream = AsyncMock(
-            side_effect=Exception("Stream creation failed"))
+            side_effect=Exception("Stream creation failed")
+        )
 
         payload = {"url": "http://example.com/stream.m3u8"}
         response = client.post("/streams", json=payload)
@@ -485,10 +504,10 @@ class TestStreamValidation:
             "http://example.com/stream.m3u8",
             "https://secure.example.com/playlist.m3u8",
             "http://192.168.1.100:8085/live/stream.ts",
-            "https://cdn.example.com/video.mp4"
+            "https://cdn.example.com/video.mp4",
         ]
 
-        with patch('api.stream_manager') as mock_sm:
+        with patch("api.stream_manager") as mock_sm:
             mock_sm.get_or_create_stream = AsyncMock(return_value="test_123")
 
             for url in valid_urls:
@@ -502,15 +521,14 @@ class TestStreamValidation:
             "ftp://example.com/file.m3u8",  # Wrong protocol
             "http://",  # Incomplete URL
             "",  # Empty string
-            "javascript:alert('xss')"  # XSS attempt
+            "javascript:alert('xss')",  # XSS attempt
         ]
 
         for url in invalid_urls:
             payload = {"url": url}
             response = client.post("/streams", json=payload)
             # Should either be 422 (validation) or 500 (processing error)
-            assert response.status_code in [
-                422, 500], f"Should reject URL: {url}"
+            assert response.status_code in [422, 500], f"Should reject URL: {url}"
 
 
 if __name__ == "__main__":

@@ -7,8 +7,7 @@ import asyncio
 import json
 import time
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional
 import redis.asyncio as redis
 import logging
 
@@ -23,14 +22,13 @@ class RedisStreamManager:
         self.redis_client: Optional[redis.Redis] = None
         self.worker_id = str(uuid.uuid4())
         self.heartbeat_interval = 30  # seconds
-        self.client_timeout = 300     # 5 minutes
-        self.stream_timeout = 600     # 10 minutes
+        self.client_timeout = 300  # 5 minutes
+        self.stream_timeout = 600  # 10 minutes
         self._heartbeat_task: Optional[asyncio.Task] = None
 
     async def connect(self):
         """Initialize Redis connection"""
-        self.redis_client = redis.from_url(
-            self.redis_url, decode_responses=True)
+        self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
         await self.redis_client.ping()
         logger.info(f"Redis connected for worker {self.worker_id}")
 
@@ -55,10 +53,12 @@ class RedisStreamManager:
                 await self.redis_client.hset(
                     "workers",
                     self.worker_id,
-                    json.dumps({
-                        "last_seen": time.time(),
-                        "streams": await self._get_worker_streams()
-                    })
+                    json.dumps(
+                        {
+                            "last_seen": time.time(),
+                            "streams": await self._get_worker_streams(),
+                        }
+                    ),
                 )
             except asyncio.CancelledError:
                 break
@@ -68,7 +68,7 @@ class RedisStreamManager:
     async def _get_worker_streams(self) -> List[str]:
         """Get list of streams owned by this worker"""
         streams = []
-        pattern = f"stream:*"
+        pattern = "stream:*"
         async for key in self.redis_client.scan_iter(match=pattern):
             stream_data = await self.redis_client.hgetall(key)
             if stream_data.get("owner") == self.worker_id:
@@ -89,7 +89,7 @@ class RedisStreamManager:
         url: str,
         profile: str,
         ffmpeg_args: List[str],
-        user_agent: str = None
+        user_agent: str = None,
     ) -> bool:
         """Create a shared transcoding stream that multiple clients can connect to"""
 
@@ -117,12 +117,13 @@ class RedisStreamManager:
             "status": "starting",
             "client_count": 0,
             "total_bytes": 0,
-            "ffmpeg_pid": 0
+            "ffmpeg_pid": 0,
         }
 
         await self.redis_client.hset(stream_key, mapping=stream_data)
         logger.info(
-            f"Created shared stream {stream_id} owned by worker {self.worker_id}")
+            f"Created shared stream {stream_id} owned by worker {self.worker_id}"
+        )
         return True
 
     async def _is_stream_healthy(self, stream_id: str, stream_data: Dict) -> bool:
@@ -143,7 +144,8 @@ class RedisStreamManager:
             last_seen = worker_info.get("last_seen", 0)
             if time.time() - last_seen > self.heartbeat_interval * 2:
                 logger.warning(
-                    f"Stream {stream_id} owner {owner} last seen {time.time() - last_seen}s ago")
+                    f"Stream {stream_id} owner {owner} last seen {time.time() - last_seen}s ago"
+                )
                 return False
         except json.JSONDecodeError:
             return False
@@ -157,12 +159,15 @@ class RedisStreamManager:
         last_access = float(stream_data.get("last_access", 0))
         if time.time() - last_access > self.stream_timeout:
             logger.warning(
-                f"Stream {stream_id} inactive for {time.time() - last_access}s")
+                f"Stream {stream_id} inactive for {time.time() - last_access}s"
+            )
             return False
 
         return True
 
-    async def register_client(self, stream_id: str, client_id: str, client_info: Dict = None) -> bool:
+    async def register_client(
+        self, stream_id: str, client_id: str, client_info: Dict = None
+    ) -> bool:
         """Register a client connection to a shared stream"""
 
         stream_key = f"stream:{stream_id}"
@@ -171,7 +176,8 @@ class RedisStreamManager:
         # Verify stream exists
         if not await self.redis_client.exists(stream_key):
             logger.error(
-                f"Cannot register client {client_id} - stream {stream_id} does not exist")
+                f"Cannot register client {client_id} - stream {stream_id} does not exist"
+            )
             return False
 
         # Register client
@@ -180,7 +186,7 @@ class RedisStreamManager:
             "connected_at": time.time(),
             "last_seen": time.time(),
             "bytes_served": 0,
-            **(client_info or {})
+            **(client_info or {}),
         }
 
         await self.redis_client.hset(client_key, mapping=client_data)
@@ -212,7 +218,9 @@ class RedisStreamManager:
             await self.redis_client.hincrby(stream_key, "total_bytes", bytes_served)
 
             # Check if stream should be cleaned up
-            client_count = int(await self.redis_client.hget(stream_key, "client_count") or 0)
+            client_count = int(
+                await self.redis_client.hget(stream_key, "client_count") or 0
+            )
             if client_count <= 0:
                 # Schedule cleanup after grace period
                 # 1 minute grace period
@@ -229,30 +237,31 @@ class RedisStreamManager:
             client_data = await self.redis_client.hgetall(key)
             if client_data:
                 client_id = key.split(":", 2)[2]
-                clients.append({
-                    "client_id": client_id,
-                    **client_data
-                })
+                clients.append({"client_id": client_id, **client_data})
 
         return clients
 
-    async def update_client_stats(self, stream_id: str, client_id: str, bytes_served: int):
+    async def update_client_stats(
+        self, stream_id: str, client_id: str, bytes_served: int
+    ):
         """Update client serving statistics"""
         client_key = f"client:{stream_id}:{client_id}"
-        await self.redis_client.hset(client_key, mapping={
-            "last_seen": time.time(),
-            "bytes_served": bytes_served
-        })
+        await self.redis_client.hset(
+            client_key, mapping={"last_seen": time.time(), "bytes_served": bytes_served}
+        )
         await self.redis_client.expire(client_key, self.client_timeout)
 
-    async def update_stream_status(self, stream_id: str, status: str, ffmpeg_pid: int = None, extra_data: Dict = None):
+    async def update_stream_status(
+        self,
+        stream_id: str,
+        status: str,
+        ffmpeg_pid: int = None,
+        extra_data: Dict = None,
+    ):
         """Update stream status and metadata"""
         stream_key = f"stream:{stream_id}"
 
-        update_data = {
-            "status": status,
-            "last_access": time.time()
-        }
+        update_data = {"status": status, "last_access": time.time()}
 
         if ffmpeg_pid is not None:
             update_data["ffmpeg_pid"] = ffmpeg_pid
@@ -287,8 +296,7 @@ class RedisStreamManager:
         # Remove stream
         await self.redis_client.delete(stream_key)
 
-        logger.info(
-            f"Cleaned up stream {stream_id} and {len(clients)} clients")
+        logger.info(f"Cleaned up stream {stream_id} and {len(clients)} clients")
 
     # Process Management
 
@@ -300,13 +308,15 @@ class RedisStreamManager:
             stream_data = await self.redis_client.hgetall(key)
 
             # Check if stream matches our requirements
-            if (stream_data.get("url") == url and
-                stream_data.get("profile") == profile and
-                    await self._is_stream_healthy(key.split(":", 1)[1], stream_data)):
-
+            if (
+                stream_data.get("url") == url
+                and stream_data.get("profile") == profile
+                and await self._is_stream_healthy(key.split(":", 1)[1], stream_data)
+            ):
                 stream_id = key.split(":", 1)[1]
                 logger.info(
-                    f"Found reusable stream {stream_id} for {url} with profile {profile}")
+                    f"Found reusable stream {stream_id} for {url} with profile {profile}"
+                )
                 return stream_id
 
         return None
@@ -320,10 +330,7 @@ class RedisStreamManager:
             stream_data = await self.redis_client.hgetall(key)
             if stream_data:
                 stream_id = key.split(":", 1)[1]
-                streams.append({
-                    "stream_id": stream_id,
-                    **stream_data
-                })
+                streams.append({"stream_id": stream_id, **stream_data})
 
         return streams
 
@@ -346,8 +353,7 @@ class RedisStreamManager:
 
         # Clean up streams from stale workers
         if stale_workers:
-            logger.info(
-                f"Cleaning up streams from {len(stale_workers)} stale workers")
+            logger.info(f"Cleaning up streams from {len(stale_workers)} stale workers")
 
             pattern = "stream:*"
             async for key in self.redis_client.scan_iter(match=pattern):
@@ -357,7 +363,8 @@ class RedisStreamManager:
                 if owner in stale_workers:
                     stream_id = key.split(":", 1)[1]
                     logger.info(
-                        f"Cleaning up stream {stream_id} from stale worker {owner}")
+                        f"Cleaning up stream {stream_id} from stale worker {owner}"
+                    )
                     await self.cleanup_stream(stream_id)
 
             # Remove stale workers
@@ -368,7 +375,9 @@ class RedisStreamManager:
 class RedisConnectionPool:
     """Manages Redis connections with connection pooling"""
 
-    def __init__(self, redis_url: str = "redis://localhost:6379/0", max_connections: int = 10):
+    def __init__(
+        self, redis_url: str = "redis://localhost:6379/0", max_connections: int = 10
+    ):
         self.redis_url = redis_url
         self.max_connections = max_connections
         self.pool: Optional[redis.ConnectionPool] = None
@@ -376,9 +385,7 @@ class RedisConnectionPool:
     async def create_pool(self):
         """Create Redis connection pool"""
         self.pool = redis.ConnectionPool.from_url(
-            self.redis_url,
-            max_connections=self.max_connections,
-            decode_responses=True
+            self.redis_url, max_connections=self.max_connections, decode_responses=True
         )
 
         # Test connection
@@ -387,7 +394,8 @@ class RedisConnectionPool:
         await redis_client.close()
 
         logger.info(
-            f"Redis connection pool created with {self.max_connections} max connections")
+            f"Redis connection pool created with {self.max_connections} max connections"
+        )
 
     async def get_client(self) -> redis.Redis:
         """Get a Redis client from the pool"""

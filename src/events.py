@@ -40,8 +40,7 @@ class EventManager:
     def remove_webhook(self, webhook_url: str) -> bool:
         """Remove a webhook by URL."""
         initial_count = len(self.webhooks)
-        self.webhooks = [
-            wh for wh in self.webhooks if str(wh.url) != webhook_url]
+        self.webhooks = [wh for wh in self.webhooks if str(wh.url) != webhook_url]
         removed = len(self.webhooks) != initial_count
         if removed:
             logger.info(f"Removed webhook {webhook_url}")
@@ -55,8 +54,7 @@ class EventManager:
     async def emit_event(self, event: StreamEvent):
         """Emit an event to be processed."""
         await self.event_queue.put(event)
-        logger.debug(
-            f"Emitted event: {event.event_type} for stream {event.stream_id}")
+        logger.debug(f"Emitted event: {event.event_type} for stream {event.stream_id}")
 
     async def _process_events(self):
         """Process events from the queue."""
@@ -109,37 +107,36 @@ class EventManager:
             "event_type": event.event_type,
             "stream_id": event.stream_id,
             "timestamp": event.timestamp.isoformat(),
-            "data": event.data
+            "data": event.data,
         }
 
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "M3U-Proxy-Webhook/1.0",
-            **webhook.headers
+            **webhook.headers,
         }
 
         for attempt in range(webhook.retry_attempts + 1):
             try:
                 async with httpx.AsyncClient(timeout=webhook.timeout) as client:
                     response = await client.post(
-                        str(webhook.url),
-                        json=payload,
-                        headers=headers
+                        str(webhook.url), json=payload, headers=headers
                     )
                     if response.status_code < 400:
-                        logger.debug(
-                            f"Webhook sent successfully to {webhook.url}")
+                        logger.debug(f"Webhook sent successfully to {webhook.url}")
                         return
                     else:
                         logger.warning(
-                            f"Webhook failed with status {response.status_code}: {webhook.url}")
+                            f"Webhook failed with status {response.status_code}: {webhook.url}"
+                        )
 
             except Exception as e:
                 logger.warning(
-                    f"Webhook attempt {attempt + 1} failed for {webhook.url}: {e}")
+                    f"Webhook attempt {attempt + 1} failed for {webhook.url}: {e}"
+                )
 
             # Wait before retry (except on last attempt)
             if attempt < webhook.retry_attempts:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                await asyncio.sleep(2**attempt)  # Exponential backoff
 
         logger.error(f"All webhook attempts failed for {webhook.url}")

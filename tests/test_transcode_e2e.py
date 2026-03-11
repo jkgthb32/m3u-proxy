@@ -2,19 +2,21 @@ import sys
 import os
 import pytest
 import tempfile
-import asyncio
 
 # Add src to path so tests can import the application
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from fastapi.testclient import TestClient
 import api
 
 
-@pytest.mark.parametrize('profile_template', [
-    # Custom profile template that uses HLS output and includes the {input_url} placeholder
-    "-i {input_url} -c:v libx264 -preset veryfast -hls_time 1 -hls_list_size 0 -f hls index.m3u8"
-])
+@pytest.mark.parametrize(
+    "profile_template",
+    [
+        # Custom profile template that uses HLS output and includes the {input_url} placeholder
+        "-i {input_url} -c:v libx264 -preset veryfast -hls_time 1 -hls_list_size 0 -f hls index.m3u8"
+    ],
+)
 def test_transcode_hls_end_to_end(monkeypatch, profile_template):
     """End-to-end test: create a transcoded HLS stream and fetch the processed playlist.
 
@@ -38,12 +40,12 @@ segment1.ts
 #EXTINF:1.0,
 segment2.ts
 """
-    with open(os.path.join(tmpdir, 'index.m3u8'), 'w', encoding='utf-8') as fh:
+    with open(os.path.join(tmpdir, "index.m3u8"), "w", encoding="utf-8") as fh:
         fh.write(playlist_text)
 
     class FakeShared:
         def __init__(self, hls_dir, playlist_text):
-            self.mode = 'hls'
+            self.mode = "hls"
             self.hls_dir = hls_dir
             self._playlist = playlist_text
 
@@ -60,9 +62,19 @@ segment2.ts
         async def stop(self):
             return None
 
-        async def get_or_create_shared_stream(self, url, profile, ffmpeg_args, client_id, user_agent=None, headers=None, stream_id=None, reuse_stream_key=None):
+        async def get_or_create_shared_stream(
+            self,
+            url,
+            profile,
+            ffmpeg_args,
+            client_id,
+            user_agent=None,
+            headers=None,
+            stream_id=None,
+            reuse_stream_key=None,
+        ):
             # Return a dummy stream key and our fake shared process
-            return ('fake-stream-key', fake_shared)
+            return ("fake-stream-key", fake_shared)
 
         async def force_stop_stream(self, stream_key):
             return None
@@ -70,16 +82,13 @@ segment2.ts
     sm.pooled_manager = FakePooled()
 
     # Patch the api module's stream_manager instance so the app uses our StreamManager
-    monkeypatch.setattr(api, 'stream_manager', sm)
+    monkeypatch.setattr(api, "stream_manager", sm)
 
     # Create a TestClient AFTER monkeypatching stream_manager so lifespan uses our patched manager
     client = TestClient(api.app)
 
     # Build the transcode request using the custom profile template
-    payload = {
-        "url": "http://example.com/source.m3u8",
-        "profile": profile_template
-    }
+    payload = {"url": "http://example.com/source.m3u8", "profile": profile_template}
 
     # Create the transcoded stream
     resp = client.post("/transcode", json=payload)

@@ -5,9 +5,10 @@ This test verifies that when a client (e.g., Kodi) makes concurrent connections
 with the same client_id (e.g., during seeking), the connections don't interfere
 with each other.
 """
+
 import pytest
 import asyncio
-from stream_manager import StreamManager, ClientInfo
+from stream_manager import StreamManager
 
 
 @pytest.mark.asyncio
@@ -36,6 +37,7 @@ async def test_concurrent_connections_no_race_condition():
 
         # Simulate Connection 1: Generate unique connection_id
         import uuid
+
         connection_id_1 = str(uuid.uuid4())
         cancel_event_1 = asyncio.Event()
         manager.connection_cancel_events[connection_id_1] = cancel_event_1
@@ -70,10 +72,18 @@ async def test_concurrent_connections_no_race_condition():
         assert connection_id_1 not in manager.connection_cancel_events
 
         # CRITICAL: Connection 2 should still be active and untouched
-        assert client_id in manager.clients, "Client should still exist (Connection 2 is active)"
-        assert manager.clients[client_id].active_connection_id == connection_id_2, "Active connection should still be Connection 2"
-        assert connection_id_2 in manager.connection_cancel_events, "Connection 2's cancel event should still exist"
-        assert not cancel_event_2.is_set(), "Connection 2's cancel event should NOT be triggered"
+        assert client_id in manager.clients, (
+            "Client should still exist (Connection 2 is active)"
+        )
+        assert manager.clients[client_id].active_connection_id == connection_id_2, (
+            "Active connection should still be Connection 2"
+        )
+        assert connection_id_2 in manager.connection_cancel_events, (
+            "Connection 2's cancel event should still exist"
+        )
+        assert not cancel_event_2.is_set(), (
+            "Connection 2's cancel event should NOT be triggered"
+        )
 
         # Now cleanup Connection 2 (normal completion)
         await manager.cleanup_client(client_id, connection_id_2)
@@ -82,7 +92,9 @@ async def test_concurrent_connections_no_race_condition():
         assert client_id not in manager.clients
         assert connection_id_2 not in manager.connection_cancel_events
 
-        print("✅ Race condition test PASSED - concurrent connections properly isolated")
+        print(
+            "✅ Race condition test PASSED - concurrent connections properly isolated"
+        )
 
     finally:
         await manager.stop()
@@ -112,7 +124,9 @@ async def test_cleanup_without_connection_id_still_works():
         # Verify client is cleaned up
         assert client_id not in manager.clients
 
-        print("✅ Backward compatibility test PASSED - cleanup without connection_id works")
+        print(
+            "✅ Backward compatibility test PASSED - cleanup without connection_id works"
+        )
 
     finally:
         await manager.stop()
@@ -157,7 +171,9 @@ async def test_old_connection_cleanup_doesnt_affect_new_connection():
         # BUG CHECK: Connection 2 should NOT be canceled
         assert not event2.is_set(), "❌ BUG: Connection 2 was incorrectly canceled!"
         assert client_id in manager.clients, "❌ BUG: Client was incorrectly removed!"
-        assert conn2_id in manager.connection_cancel_events, "❌ BUG: Connection 2's event was incorrectly deleted!"
+        assert conn2_id in manager.connection_cancel_events, (
+            "❌ BUG: Connection 2's event was incorrectly deleted!"
+        )
 
         print("✅ Bug fix verified - Connection 2 unaffected by Connection 1's cleanup")
 

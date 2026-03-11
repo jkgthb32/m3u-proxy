@@ -1,6 +1,6 @@
 """
 M3U Streaming Proxy Server
-A high-performance streaming proxy service with failover support 
+A high-performance streaming proxy service with failover support
 and comprehensive API management.
 """
 

@@ -9,7 +9,7 @@ import re
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-from hwaccel import hw_accel, get_ffmpeg_hwaccel_args
+from hwaccel import hw_accel
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TranscodingProfile:
     """A transcoding profile with template variables."""
+
     name: str
     parameters: str
     description: Optional[str] = None
@@ -40,7 +41,7 @@ class TranscodingProfile:
         # First, handle variables with default values: {key|default}
         def replace_with_default(match):
             full_match = match.group(0)  # Full {key|default} or {key}
-            var_name = match.group(1)    # The variable name
+            var_name = match.group(1)  # The variable name
             default_value = match.group(2)  # The default value (if any)
 
             if var_name in variables:
@@ -52,9 +53,8 @@ class TranscodingProfile:
                 return full_match
 
         # Pattern to match {variable} or {variable|default}
-        pattern = r'\{([^}|]+)(?:\|([^}]*))?\}'
-        rendered_params = re.sub(
-            pattern, replace_with_default, rendered_params)
+        pattern = r"\{([^}|]+)(?:\|([^}]*))?\}"
+        rendered_params = re.sub(pattern, replace_with_default, rendered_params)
 
         # Split into arguments (respecting quotes)
         args = []
@@ -126,49 +126,49 @@ class TranscodingProfileManager:
         profiles["default"] = TranscodingProfile(
             name="default",
             description="Default profile with hardware acceleration",
-            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -b:v {{video_bitrate|2M}} -c:a aac -b:a {{audio_bitrate|128k}} -f {{format|mp4}} {{output_args|}}"
+            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -b:v {{video_bitrate|2M}} -c:a aac -b:a {{audio_bitrate|128k}} -f {{format|mp4}} {{output_args|}}",
         )
 
         # High quality profile
         profiles["hq"] = TranscodingProfile(
             name="hq",
             description="High quality transcoding",
-            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -crf {{crf|23}} -c:a aac -b:a {{audio_bitrate|192k}} -f {{format|mp4}} {{output_args|}}"
+            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -crf {{crf|23}} -c:a aac -b:a {{audio_bitrate|192k}} -f {{format|mp4}} {{output_args|}}",
         )
 
         # Low latency profile
         profiles["lowlatency"] = TranscodingProfile(
             name="lowlatency",
             description="Low latency streaming",
-            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -tune zerolatency -b:v {{video_bitrate|1M}} -c:a aac -b:a {{audio_bitrate|96k}} -f {{format|mpegts}} {{output_args|}}"
+            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -tune zerolatency -b:v {{video_bitrate|1M}} -c:a aac -b:a {{audio_bitrate|96k}} -f {{format|mpegts}} {{output_args|}}",
         )
 
         # 720p profile
         profiles["720p"] = TranscodingProfile(
             name="720p",
             description="720p transcoding",
-            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -vf scale=1280:720 -b:v {{video_bitrate|2500k}} -c:a aac -b:a {{audio_bitrate|128k}} -f {{format|mp4}} {{output_args|}}"
+            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -vf scale=1280:720 -b:v {{video_bitrate|2500k}} -c:a aac -b:a {{audio_bitrate|128k}} -f {{format|mp4}} {{output_args|}}",
         )
 
         # 1080p profile
         profiles["1080p"] = TranscodingProfile(
             name="1080p",
             description="1080p transcoding",
-            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -vf scale=1920:1080 -b:v {{video_bitrate|5000k}} -c:a aac -b:a {{audio_bitrate|192k}} -f {{format|mp4}} {{output_args|}}"
+            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h264_encoder} -preset {preset} -vf scale=1920:1080 -b:v {{video_bitrate|5000k}} -c:a aac -b:a {{audio_bitrate|192k}} -f {{format|mp4}} {{output_args|}}",
         )
 
         # HEVC/H.265 profile
         profiles["hevc"] = TranscodingProfile(
             name="hevc",
             description="HEVC/H.265 encoding",
-            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h265_encoder} -preset {preset} -b:v {{video_bitrate|2M}} -c:a aac -b:a {{audio_bitrate|128k}} -f {{format|mp4}} {{output_args|}}"
+            parameters=f"{hwaccel_str}-i {{input_url}} -c:v {h265_encoder} -preset {preset} -b:v {{video_bitrate|2M}} -c:a aac -b:a {{audio_bitrate|128k}} -f {{format|mp4}} {{output_args|}}",
         )
 
         # Audio only profile
         profiles["audio"] = TranscodingProfile(
             name="audio",
             description="Audio only transcoding",
-            parameters=f"-i {{input_url}} -vn -c:a aac -b:a {{audio_bitrate|192k}} -f {{format|adts}} {{output_args|}}"
+            parameters="-i {input_url} -vn -c:a aac -b:a {audio_bitrate|192k} -f {format|adts} {output_args|}",
         )
 
         return profiles
@@ -179,9 +179,14 @@ class TranscodingProfileManager:
 
     def list_profiles(self) -> Dict[str, str]:
         """List all available profiles with descriptions."""
-        return {name: profile.description or profile.name for name, profile in self.profiles.items()}
+        return {
+            name: profile.description or profile.name
+            for name, profile in self.profiles.items()
+        }
 
-    def create_profile_from_template(self, name: str, parameters: str, description: Optional[str] = None) -> TranscodingProfile:
+    def create_profile_from_template(
+        self, name: str, parameters: str, description: Optional[str] = None
+    ) -> TranscodingProfile:
         """
         Create a custom profile from a parameter template.
 
@@ -193,7 +198,9 @@ class TranscodingProfileManager:
         Returns:
             TranscodingProfile instance
         """
-        return TranscodingProfile(name=name, parameters=parameters, description=description)
+        return TranscodingProfile(
+            name=name, parameters=parameters, description=description
+        )
 
     def get_default_variables(self) -> Dict[str, str]:
         """Get default template variables."""
@@ -230,15 +237,25 @@ class TranscodingProfileManager:
 
         # Check for dangerous commands (basic security)
         dangerous_patterns = [
-            r'\brm\b', r'\bdel\b', r'\bmv\b', r'\bcp\b',
-            r'\bwget\b', r'\bcurl\b', r'\bsh\b', r'\bbash\b',
-            r'\b;\b', r'\b&&\b', r'\b\|\|\b', r'\b`\b'
+            r"\brm\b",
+            r"\bdel\b",
+            r"\bmv\b",
+            r"\bcp\b",
+            r"\bwget\b",
+            r"\bcurl\b",
+            r"\bsh\b",
+            r"\bbash\b",
+            r"\b;\b",
+            r"\b&&\b",
+            r"\b\|\|\b",
+            r"\b`\b",
         ]
 
         for pattern in dangerous_patterns:
             if re.search(pattern, parameters, re.IGNORECASE):
                 logger.warning(
-                    f"Template contains potentially dangerous pattern: {pattern}")
+                    f"Template contains potentially dangerous pattern: {pattern}"
+                )
                 return False
 
         return True

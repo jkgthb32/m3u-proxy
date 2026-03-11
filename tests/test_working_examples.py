@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 # Add src to path
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 class TestBasicFunctionality:
@@ -20,9 +21,7 @@ class TestBasicFunctionality:
 
         # Act
         client = ClientInfo(
-            client_id=client_id,
-            created_at=created_time,
-            last_access=last_access_time
+            client_id=client_id, created_at=created_time, last_access=last_access_time
         )
 
         # Assert
@@ -46,7 +45,7 @@ class TestBasicFunctionality:
             stream_id=stream_id,
             original_url=url,
             created_at=created_time,
-            last_access=last_access_time
+            last_access=last_access_time,
         )
 
         # Assert
@@ -122,13 +121,14 @@ class TestBasicFunctionality:
         # Arrange
         manager = StreamManager()
         primary_url = "http://primary.com/stream.m3u8"
-        backup_urls = ["http://backup1.com/stream.m3u8",
-                       "http://backup2.com/stream.m3u8"]
+        backup_urls = [
+            "http://backup1.com/stream.m3u8",
+            "http://backup2.com/stream.m3u8",
+        ]
 
         # Act
         stream_id = await manager.get_or_create_stream(
-            primary_url,
-            failover_urls=backup_urls
+            primary_url, failover_urls=backup_urls
         )
 
         # Assert
@@ -145,10 +145,7 @@ class TestBasicFunctionality:
         custom_ua = "MyTestApp/1.0"
 
         # Act
-        stream_id = await manager.get_or_create_stream(
-            test_url,
-            user_agent=custom_ua
-        )
+        stream_id = await manager.get_or_create_stream(test_url, user_agent=custom_ua)
 
         # Assert
         assert stream_id is not None

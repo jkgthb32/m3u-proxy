@@ -3,7 +3,6 @@ Configuration for Redis pooling and multi-worker coordination.
 """
 
 import os
-from typing import Optional
 from config import settings
 
 
@@ -17,10 +16,14 @@ def get_redis_config() -> dict:
 
     if redis_password:
         redis_url = os.getenv(
-            "REDIS_URL", f"redis://:{redis_password}@{settings.REDIS_HOST}:{settings.REDIS_SERVER_PORT}/{settings.REDIS_DB}")
+            "REDIS_URL",
+            f"redis://:{redis_password}@{settings.REDIS_HOST}:{settings.REDIS_SERVER_PORT}/{settings.REDIS_DB}",
+        )
     else:
         redis_url = os.getenv(
-            "REDIS_URL", f"redis://{settings.REDIS_HOST}:{settings.REDIS_SERVER_PORT}/{settings.REDIS_DB}")
+            "REDIS_URL",
+            f"redis://{settings.REDIS_HOST}:{settings.REDIS_SERVER_PORT}/{settings.REDIS_DB}",
+        )
 
     return {
         "host": settings.REDIS_HOST,
@@ -35,7 +38,7 @@ def get_redis_config() -> dict:
         "worker_id": settings.WORKER_ID,
         "heartbeat_interval": settings.HEARTBEAT_INTERVAL,
         "cleanup_interval": settings.CLEANUP_INTERVAL,
-        "sharing_strategy": settings.STREAM_SHARING_STRATEGY
+        "sharing_strategy": settings.STREAM_SHARING_STRATEGY,
     }
 
 

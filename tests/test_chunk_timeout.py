@@ -2,7 +2,6 @@ import asyncio
 import pytest
 
 from stream_manager import StreamManager
-import httpx
 
 
 class HangingIterator:
@@ -42,11 +41,11 @@ async def test_per_chunk_timeout_triggers_stream_failed(monkeypatch):
     manager = StreamManager()
 
     # Shorten timeout for fast test
-    monkeypatch.setattr('config.settings.LIVE_CHUNK_TIMEOUT_SECONDS', 0.05)
+    monkeypatch.setattr("config.settings.LIVE_CHUNK_TIMEOUT_SECONDS", 0.05)
     # Disable retries for this test - we want immediate failure on timeout
-    monkeypatch.setattr('config.settings.STREAM_RETRY_ATTEMPTS', 0)
+    monkeypatch.setattr("config.settings.STREAM_RETRY_ATTEMPTS", 0)
     # Also set a short total timeout to ensure test completes quickly
-    monkeypatch.setattr('config.settings.STREAM_TOTAL_TIMEOUT', 1.0)
+    monkeypatch.setattr("config.settings.STREAM_TOTAL_TIMEOUT", 1.0)
 
     # Create a live continuous stream (.ts)
     primary_url = "http://example.com/live/stream.ts"
@@ -59,7 +58,7 @@ async def test_per_chunk_timeout_triggers_stream_failed(monkeypatch):
     async def fake_stream(method, url, headers=None, follow_redirects=True):
         return mock_cm
 
-    monkeypatch.setattr(manager.live_stream_client, 'stream', fake_stream)
+    monkeypatch.setattr(manager.live_stream_client, "stream", fake_stream)
 
     # Capture emitted events
     events = []
@@ -70,8 +69,9 @@ async def test_per_chunk_timeout_triggers_stream_failed(monkeypatch):
     manager._emit_event = fake_emit
 
     # Call the direct stream handler - it will attempt to read first chunk and timeout
-    resp = await manager.stream_continuous_direct(stream_id, 'test_client')
+    await manager.stream_continuous_direct(stream_id, "test_client")
 
     # Because upstream never yields, the generator should stop and STREAM_FAILED should be emitted
-    assert any(
-        e[0] == 'STREAM_FAILED' for e in events), f"Expected STREAM_FAILED event, got {events}"
+    assert any(e[0] == "STREAM_FAILED" for e in events), (
+        f"Expected STREAM_FAILED event, got {events}"
+    )

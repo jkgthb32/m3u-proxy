@@ -1,16 +1,13 @@
 from fastapi import FastAPI, HTTPException, Query, Response, Request, Depends, Header
-from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.openapi.docs import get_swagger_ui_html
 from contextlib import asynccontextmanager
 import logging
-import uuid
 import hashlib
 import subprocess
 from urllib.parse import unquote, urlparse
 from typing import Optional, List, Dict
-from pydantic import BaseModel, field_validator, ValidationError
+from pydantic import BaseModel, field_validator
 from datetime import datetime, timezone
 import os
 
@@ -18,10 +15,10 @@ from stream_manager import StreamManager
 from events import EventManager
 from models import StreamEvent, EventType, WebhookConfig
 from config import settings, VERSION
-from transcoding import get_profile_manager, TranscodingProfileManager
+from transcoding import get_profile_manager
 from redis_config import get_redis_config, should_use_pooling
 from hwaccel import hw_accel
-from broadcast_manager import BroadcastManager, BroadcastConfig, BroadcastStatus
+from broadcast_manager import BroadcastManager, BroadcastConfig
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -32,14 +29,11 @@ def get_ffmpeg_version() -> Optional[str]:
     """Get the ffmpeg version string"""
     try:
         result = subprocess.run(
-            ['ffmpeg', '-version'],
-            capture_output=True,
-            text=True,
-            timeout=5
+            ["ffmpeg", "-version"], capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
             # Extract the version from first line (e.g., "ffmpeg version 4.4.2")
-            first_line = result.stdout.split('\n')[0]
+            first_line = result.stdout.split("\n")[0]
             return first_line.strip()
         return None
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
@@ -50,25 +44,28 @@ def get_ffmpeg_version() -> Optional[str]:
 def get_content_type(url: str) -> str:
     """Determine content type based on URL extension"""
     url_lower = url.lower()
-    if url_lower.endswith(('.ts', '?profile=pass')):
-        return 'video/mp2t'
-    elif url_lower.endswith('.m3u8'):
-        return 'application/vnd.apple.mpegurl'
-    elif url_lower.endswith('.mp4'):
-        return 'video/mp4'
-    elif url_lower.endswith('.mkv'):
-        return 'video/x-matroska'
-    elif url_lower.endswith('.webm'):
-        return 'video/webm'
-    elif url_lower.endswith('.avi'):
-        return 'video/x-msvideo'
+    if url_lower.endswith((".ts", "?profile=pass")):
+        return "video/mp2t"
+    elif url_lower.endswith(".m3u8"):
+        return "application/vnd.apple.mpegurl"
+    elif url_lower.endswith(".mp4"):
+        return "video/mp4"
+    elif url_lower.endswith(".mkv"):
+        return "video/x-matroska"
+    elif url_lower.endswith(".webm"):
+        return "video/webm"
+    elif url_lower.endswith(".avi"):
+        return "video/x-msvideo"
     else:
-        return 'application/octet-stream'
+        return "application/octet-stream"
 
 
 def is_direct_stream(url: str) -> bool:
     """Check if URL is a direct stream (not HLS playlist)"""
-    return url.lower().endswith(('.ts', '.mp4', '.mkv', '.webm', '.avi', '?profile=pass')) or '/live/' in url
+    return (
+        url.lower().endswith((".ts", ".mp4", ".mkv", ".webm", ".avi", "?profile=pass"))
+        or "/live/" in url
+    )
 
 
 def detect_https_from_headers(request: Request) -> bool:
@@ -104,7 +101,8 @@ def detect_https_from_headers(request: Request) -> bool:
         actual_scheme = request.url.scheme
         is_https = actual_scheme == "https"
         logger.debug(
-            f"🔌 Direct connection detected (no X-Forwarded-For) - using actual scheme: {actual_scheme}")
+            f"🔌 Direct connection detected (no X-Forwarded-For) - using actual scheme: {actual_scheme}"
+        )
         return is_https
 
     # Request came through a reverse proxy - trust the forwarded headers
@@ -174,7 +172,7 @@ def detect_reverse_proxy(request: Request) -> bool:
         "forwarded",
         "front-end-https",
         "cf-connecting-ip",  # Cloudflare
-        "true-client-ip",    # Cloudflare Enterprise
+        "true-client-ip",  # Cloudflare Enterprise
         "x-original-forwarded-for",  # AWS ELB
     ]
 
@@ -199,7 +197,7 @@ def validate_url(url: str) -> str:
         raise ValueError("Invalid URL format")
 
     # Ensure scheme is http or https
-    if parsed.scheme.lower() not in ['http', 'https']:
+    if parsed.scheme.lower() not in ["http", "https"]:
         raise ValueError("URL must use HTTP or HTTPS protocol")
 
     # Ensure there's a valid netloc (domain)
@@ -207,14 +205,14 @@ def validate_url(url: str) -> str:
         raise ValueError("URL must have a valid domain")
 
     # Security checks
-    if url.lower().startswith('javascript:'):
+    if url.lower().startswith("javascript:"):
         raise ValueError("JavaScript URLs are not allowed")
 
-    if url.lower().startswith('file:'):
+    if url.lower().startswith("file:"):
         raise ValueError("File URLs are not allowed")
 
     # Additional security check for malicious URLs
-    dangerous_patterns = ['<script', 'javascript:', 'data:', 'vbscript:']
+    dangerous_patterns = ["<script", "javascript:", "data:", "vbscript:"]
     url_lower = url.lower()
     for pattern in dangerous_patterns:
         if pattern in url_lower:
@@ -243,26 +241,26 @@ class StreamCreateRequest(BaseModel):
     silence_failover_threshold: Optional[int] = None
     silence_monitoring_grace_period: Optional[float] = None
 
-    @field_validator('url')
+    @field_validator("url")
     @classmethod
     def validate_primary_url(cls, v):
         return validate_url(v)
 
-    @field_validator('failover_urls')
+    @field_validator("failover_urls")
     @classmethod
     def validate_failover_urls(cls, v):
         if v is not None:
             return [validate_url(url) for url in v]
         return v
 
-    @field_validator('failover_resolver_url')
+    @field_validator("failover_resolver_url")
     @classmethod
     def validate_failover_resolver_url(cls, v):
         if v is not None:
             return validate_url(v)
         return v
 
-    @field_validator('metadata')
+    @field_validator("metadata")
     @classmethod
     def validate_metadata(cls, v):
         if v is not None:
@@ -271,11 +269,11 @@ class StreamCreateRequest(BaseModel):
                 raise ValueError("metadata must be a dictionary")
             for key, value in v.items():
                 if not isinstance(key, str):
-                    raise ValueError(
-                        f"metadata key must be string, got {type(key)}")
+                    raise ValueError(f"metadata key must be string, got {type(key)}")
                 if not isinstance(value, (str, int, float, bool)):
                     raise ValueError(
-                        f"metadata value for '{key}' must be string, int, float, or bool")
+                        f"metadata value for '{key}' must be string, int, float, or bool"
+                    )
             # Convert all values to strings for consistency
             return {str(k): str(v) for k, v in v.items()}
         return v
@@ -302,26 +300,26 @@ class TranscodeCreateRequest(BaseModel):
     profile_variables: Optional[Dict[str, str]] = None
     output_format: Optional[str] = None  # mp4, mkv, ts, etc.
 
-    @field_validator('url')
+    @field_validator("url")
     @classmethod
     def validate_primary_url(cls, v):
         return validate_url(v)
 
-    @field_validator('failover_urls')
+    @field_validator("failover_urls")
     @classmethod
     def validate_failover_urls(cls, v):
         if v is not None:
             return [validate_url(url) for url in v]
         return v
 
-    @field_validator('failover_resolver_url')
+    @field_validator("failover_resolver_url")
     @classmethod
     def validate_failover_resolver_url(cls, v):
         if v is not None:
             return validate_url(v)
         return v
 
-    @field_validator('metadata')
+    @field_validator("metadata")
     @classmethod
     def validate_metadata(cls, v):
         if v is not None:
@@ -330,16 +328,16 @@ class TranscodeCreateRequest(BaseModel):
                 raise ValueError("metadata must be a dictionary")
             for key, value in v.items():
                 if not isinstance(key, str):
-                    raise ValueError(
-                        f"metadata key must be string, got {type(key)}")
+                    raise ValueError(f"metadata key must be string, got {type(key)}")
                 if not isinstance(value, (str, int, float, bool)):
                     raise ValueError(
-                        f"metadata value for '{key}' must be string, int, float, or bool")
+                        f"metadata value for '{key}' must be string, int, float, or bool"
+                    )
             # Convert all values to strings for consistency
             return {str(k): str(v) for k, v in v.items()}
         return v
 
-    @field_validator('profile_variables')
+    @field_validator("profile_variables")
     @classmethod
     def validate_profile_variables(cls, v):
         if v is not None:
@@ -352,11 +350,10 @@ class TranscodeCreateRequest(BaseModel):
 
 # Global stream manager and event manager
 redis_config = get_redis_config()
-redis_url = redis_config.get('redis_url') if should_use_pooling() else None
+redis_url = redis_config.get("redis_url") if should_use_pooling() else None
 enable_pooling = should_use_pooling()
 
-stream_manager = StreamManager(
-    redis_url=redis_url, enable_pooling=enable_pooling)
+stream_manager = StreamManager(redis_url=redis_url, enable_pooling=enable_pooling)
 event_manager = EventManager()
 broadcast_manager = BroadcastManager()
 
@@ -377,7 +374,8 @@ async def lifespan(app: FastAPI):
     def log_event_handler(event: StreamEvent):
         """Simple event handler that logs all events"""
         logger.info(
-            f"Event: {event.event_type} for stream {event.stream_id} at {event.timestamp}")
+            f"Event: {event.event_type} for stream {event.stream_id} at {event.timestamp}"
+        )
 
     # Add the handler to the event manager
     event_manager.add_handler(log_event_handler)
@@ -396,40 +394,39 @@ app = FastAPI(
     version=VERSION,
     description="Advanced IPTV streaming proxy with client management, stats, and failover support",
     lifespan=lifespan,
-    root_path=settings.ROOT_PATH if hasattr(settings, 'ROOT_PATH') else "",
+    root_path=settings.ROOT_PATH if hasattr(settings, "ROOT_PATH") else "",
     docs_url=None,  # We'll create a minimal custom docs with logo/favicon
     # docs_url=settings.DOCS_URL if hasattr(settings, 'DOCS_URL') else "/docs",
-    redoc_url=settings.REDOC_URL if hasattr(
-        settings, 'REDOC_URL') else "/redoc",
-    openapi_url=settings.OPENAPI_URL if hasattr(
-        settings, 'OPENAPI_URL') else "/openapi.json",
+    redoc_url=settings.REDOC_URL if hasattr(settings, "REDOC_URL") else "/redoc",
+    openapi_url=settings.OPENAPI_URL
+    if hasattr(settings, "OPENAPI_URL")
+    else "/openapi.json",
 )
 
 # Mount static files for logo and favicon
 # Get the parent directory of src/ to access root-level static files
-static_path = os.path.join(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))), "static")
+static_path = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static"
+)
 # If static directory doesn't exist in the expected location, try the actual root
 if not os.path.exists(static_path):
     # Fallback to /app/static for Docker or current working directory
     static_path = os.path.join(os.getcwd(), "static")
     if not os.path.exists(static_path):
         # Last resort: try parent directory
-        static_path = os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__)))
+        static_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Verify static path exists and log it
 if os.path.exists(static_path):
     try:
         static_files = os.listdir(static_path)
-        logger.info(f"Static files directory found")
+        logger.info("Static files directory found")
     except Exception as e:
         logger.warning(f"❌ Could not list static directory: {e}")
 else:
     logger.error(f"❌ Static files directory NOT found at: {static_path}")
     logger.error(f"Current working directory: {os.getcwd()}")
-    logger.error(
-        f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
+    logger.error(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
 
 # Configure CORS to allow all origins for streaming compatibility
 app.add_middleware(
@@ -500,17 +497,16 @@ async def serve_static_file(filename: str):
     file_path = os.path.join(static_path, filename)
     if os.path.exists(file_path) and os.path.isfile(file_path):
         # Determine media type based on extension
-        if filename.endswith('.svg'):
-            media_type = 'image/svg+xml'
-        elif filename.endswith('.png'):
-            media_type = 'image/png'
-        elif filename.endswith('.ico'):
-            media_type = 'image/x-icon'
+        if filename.endswith(".svg"):
+            media_type = "image/svg+xml"
+        elif filename.endswith(".png"):
+            media_type = "image/png"
+        elif filename.endswith(".ico"):
+            media_type = "image/x-icon"
         else:
             media_type = None
         return FileResponse(file_path, media_type=media_type)
-    raise HTTPException(
-        status_code=404, detail=f"Static file not found: {filename}")
+    raise HTTPException(status_code=404, detail=f"Static file not found: {filename}")
 
 
 # Serve favicon directly at root for browsers
@@ -559,14 +555,15 @@ def get_client_info(request: Request):
     return {
         "user_agent": request.headers.get("user-agent") or "unknown",
         "ip_address": ip_address,
-        "username": username
+        "username": username,
     }
 
 
 async def verify_token(
     x_api_token: Optional[str] = Header(None, alias="X-API-Token"),
     api_token: Optional[str] = Query(
-        None, description="API token (alternative to X-API-Token header)")
+        None, description="API token (alternative to X-API-Token header)"
+    ),
 ):
     """
     Verify API token if API_TOKEN is configured.
@@ -611,7 +608,7 @@ async def root():
         "message": "m3u proxy is running",
         "version": VERSION,
         "uptime": proxy_stats["uptime_seconds"],
-        "stats": proxy_stats
+        "stats": proxy_stats,
     }
 
 
@@ -633,35 +630,40 @@ async def get_info():
             "enabled": hw_accel.is_available(),
             "type": hw_accel.get_type(),
             "device": hw_accel.config.device if hw_accel.is_available() else None,
-            "ffmpeg_args": hw_accel.config.ffmpeg_args if hw_accel.is_available() else []
+            "ffmpeg_args": hw_accel.config.ffmpeg_args
+            if hw_accel.is_available()
+            else [],
         },
         "redis": {
             "enabled": settings.REDIS_ENABLED,
             "pooling_enabled": use_pooling,
             "host": redis_config.get("host") if settings.REDIS_ENABLED else None,
             "port": redis_config.get("port") if settings.REDIS_ENABLED else None,
-            "password": redis_config.get("password") if settings.REDIS_ENABLED else None,
+            "password": redis_config.get("password")
+            if settings.REDIS_ENABLED
+            else None,
             "db": redis_config.get("db") if settings.REDIS_ENABLED else None,
-            "max_clients_per_stream": settings.MAX_CLIENTS_PER_SHARED_STREAM if use_pooling else None,
+            "max_clients_per_stream": settings.MAX_CLIENTS_PER_SHARED_STREAM
+            if use_pooling
+            else None,
             "stream_timeout": settings.SHARED_STREAM_TIMEOUT if use_pooling else None,
-            "sharing_strategy": settings.STREAM_SHARING_STRATEGY if use_pooling else None
+            "sharing_strategy": settings.STREAM_SHARING_STRATEGY
+            if use_pooling
+            else None,
         },
-        "transcoding": {
-            "enabled": True,
-            "profiles": profile_manager.list_profiles()
-        },
+        "transcoding": {"enabled": True, "profiles": profile_manager.list_profiles()},
         "configuration": {
             "default_user_agent": settings.DEFAULT_USER_AGENT,
             "client_timeout": settings.CLIENT_TIMEOUT,
             "stream_timeout": settings.STREAM_TIMEOUT,
             "cleanup_interval": settings.CLEANUP_INTERVAL,
-            "max_retries": settings.DEFAULT_MAX_RETRIES
+            "max_retries": settings.DEFAULT_MAX_RETRIES,
         },
         "worker": {
             "worker_id": settings.WORKER_ID if settings.WORKER_ID else "single",
             "heartbeat_interval": settings.HEARTBEAT_INTERVAL,
-            "multi_worker_mode": bool(settings.WORKER_ID)
-        }
+            "multi_worker_mode": bool(settings.WORKER_ID),
+        },
     }
 
     return info
@@ -670,9 +672,11 @@ async def get_info():
 async def resolve_stream_id(
     stream_id: str,
     url: Optional[str] = Query(
-        None, description="Stream URL (for direct access, overrides stream_id in path)"),
+        None, description="Stream URL (for direct access, overrides stream_id in path)"
+    ),
     parent: Optional[str] = Query(
-        None, description="Parent stream ID (for variant playlists)")
+        None, description="Parent stream ID (for variant playlists)"
+    ),
 ) -> str:
     """
     Dependency to get a stream_id. If a URL is provided in the query,
@@ -687,14 +691,16 @@ async def resolve_stream_id(
             validate_url(decoded_url)
             # If parent is provided, this is a variant stream
             parent_id = parent if parent else None
-            return await stream_manager.get_or_create_stream(decoded_url, parent_stream_id=parent_id)
+            return await stream_manager.get_or_create_stream(
+                decoded_url, parent_stream_id=parent_id
+            )
         except ValueError as e:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid URL provided: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid URL provided: {e}")
         except Exception as e:
             logger.error(f"Error creating stream from URL parameter: {e}")
             raise HTTPException(
-                status_code=500, detail="Failed to process stream from URL")
+                status_code=500, detail="Failed to process stream from URL"
+            )
 
     if stream_id not in stream_manager.streams:
         raise HTTPException(status_code=404, detail="Stream not found")
@@ -732,8 +738,8 @@ async def create_stream(request: StreamCreateRequest):
                 "failover_urls": request.failover_urls or [],
                 "user_agent": request.user_agent,
                 "stream_type": "direct" if is_direct_stream(request.url) else "hls",
-                "metadata": request.metadata or {}
-            }
+                "metadata": request.metadata or {},
+            },
         )
         await event_manager.emit_event(event)
 
@@ -749,13 +755,16 @@ async def create_stream(request: StreamCreateRequest):
             "stream_id": stream_id,
             "primary_url": request.url,
             "failover_urls": request.failover_urls or [],
-            "user_agent": request.user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+            "user_agent": request.user_agent
+            or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
             "stream_type": stream_type,
             "stream_endpoint": stream_endpoint,
             "playlist_url": stream_endpoint,  # For test compatibility
             # For test compatibility
-            "direct_url": f"/stream/{stream_id}" if stream_type == "direct" else stream_endpoint,
-            "message": f"Stream created successfully ({stream_type})"
+            "direct_url": f"/stream/{stream_id}"
+            if stream_type == "direct"
+            else stream_endpoint,
+            "message": f"Stream created successfully ({stream_type})",
         }
 
         # Include metadata in response if provided
@@ -780,13 +789,12 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
         profile_name = profile_identifier
 
         # Check if it looks like custom FFmpeg args (starts with -)
-        if profile_identifier.strip().startswith('-'):
-            logger.info(
-                f"Using custom profile template: {profile_identifier[:50]}...")
+        if profile_identifier.strip().startswith("-"):
+            logger.info(f"Using custom profile template: {profile_identifier[:50]}...")
             profile = profile_manager.create_profile_from_template(
                 name="custom",
                 parameters=profile_identifier,
-                description="Custom FFmpeg profile from API"
+                description="Custom FFmpeg profile from API",
             )
             profile_name = "custom"
         else:
@@ -795,18 +803,18 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
 
             # If not found, error with available profiles
             if not profile:
-                available_profiles = ', '.join(
-                    profile_manager.list_profiles().keys())
+                available_profiles = ", ".join(profile_manager.list_profiles().keys())
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Profile '{profile_identifier}' not found. Available profiles: {available_profiles}"
+                    detail=f"Profile '{profile_identifier}' not found. Available profiles: {available_profiles}",
                 )
 
         # Prepare template variables by merging required vars with user's custom variables
         template_vars = {
             "input_url": request.url,
             "output_args": "pipe:1",  # Output to stdout for streaming
-            "format": request.output_format or "mpegts",  # Default to MPEGTS for streaming
+            "format": request.output_format
+            or "mpegts",  # Default to MPEGTS for streaming
         }
         # Merge with user-provided variables (user vars take precedence for overrides)
         if request.profile_variables:
@@ -820,7 +828,7 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
             "transcoding": "true",
             "profile": profile_name,
             "profile_variables": str(request.profile_variables or {}),
-            "ffmpeg_args": " ".join(ffmpeg_args)
+            "ffmpeg_args": " ".join(ffmpeg_args),
         }
         if request.metadata:
             transcoding_metadata.update(request.metadata)
@@ -857,8 +865,8 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
                 "profile": profile_name,
                 "profile_variables": request.profile_variables or {},
                 "ffmpeg_args": ffmpeg_args,
-                "metadata": request.metadata or {}
-            }
+                "metadata": request.metadata or {},
+            },
         )
         await event_manager.emit_event(event)
 
@@ -867,16 +875,16 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
             try:
                 lowered = [str(a).lower() for a in (args or [])]
                 for i, a in enumerate(lowered):
-                    if a == '-f' and i + 1 < len(lowered) and lowered[i + 1] == 'hls':
+                    if a == "-f" and i + 1 < len(lowered) and lowered[i + 1] == "hls":
                         return True
-                    if a.startswith('-f') and 'hls' in a:
+                    if a.startswith("-f") and "hls" in a:
                         return True
-                    if a.startswith('-hls_time') or 'hls_time' in a:
+                    if a.startswith("-hls_time") or "hls_time" in a:
                         return True
-                    if a.endswith('.m3u8'):
+                    if a.endswith(".m3u8"):
                         return True
                 # also check joined string as fallback
-                if ' -f hls' in ' '.join(lowered) or '-hls_time' in ' '.join(lowered):
+                if " -f hls" in " ".join(lowered) or "-hls_time" in " ".join(lowered):
                     return True
             except Exception:
                 pass
@@ -888,7 +896,7 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
         if is_hls_output:
             stream_endpoint = f"/hls/{stream_id}/playlist.m3u8"
             direct_url = stream_endpoint
-            out_format = 'hls'
+            out_format = "hls"
             message = "Transcoded stream created successfully (HLS output)"
         else:
             stream_endpoint = f"/stream/{stream_id}"
@@ -900,7 +908,8 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
             "stream_id": stream_id,
             "primary_url": request.url,
             "failover_urls": request.failover_urls or [],
-            "user_agent": request.user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+            "user_agent": request.user_agent
+            or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
             "stream_type": "transcoded",
             "stream_endpoint": stream_endpoint,
             "playlist_url": stream_endpoint if is_hls_output else None,
@@ -909,7 +918,7 @@ async def create_transcode_stream(request: TranscodeCreateRequest):
             "profile": profile.name,
             "profile_variables": template_vars,  # Show the actual variables used
             "ffmpeg_args": ffmpeg_args,
-            "message": message
+            "message": message,
         }
 
         # Include metadata in response if provided
@@ -936,25 +945,25 @@ async def list_transcode_profiles():
         for name in profiles_dict.keys():
             profile = profile_manager.get_profile(name)
             if profile:
-                profile_details.append({
-                    "name": profile.name,
-                    "description": profile.description or profile.name,
-                    "parameters": profile.parameters
-                })
+                profile_details.append(
+                    {
+                        "name": profile.name,
+                        "description": profile.description or profile.name,
+                        "parameters": profile.parameters,
+                    }
+                )
 
         # Check hardware acceleration availability
         from hwaccel import HardwareAccelDetector, is_hwaccel_available
+
         hw_detector = HardwareAccelDetector()
         hw_available = is_hwaccel_available()
         hw_type = hw_detector.config.type if hw_detector.config else None
 
         return {
             "profiles": profile_details,
-            "hardware_acceleration": {
-                "available": hw_available,
-                "type": hw_type
-            },
-            "default_variables": profile_manager.get_default_variables()
+            "hardware_acceleration": {"available": hw_available, "type": hw_type},
+            "default_variables": profile_manager.get_default_variables(),
         }
     except Exception as e:
         logger.error(f"Error listing transcoding profiles: {e}")
@@ -966,7 +975,8 @@ async def get_hls_playlist(
     request: Request,
     stream_id: str = Depends(resolve_stream_id),
     client_id: Optional[str] = Query(
-        None, description="Client ID (auto-generated if not provided)")
+        None, description="Client ID (auto-generated if not provided)"
+    ),
 ):
     """Get HLS playlist for a stream (supports both direct proxy and transcoded HLS streams)"""
     try:
@@ -980,14 +990,17 @@ async def get_hls_playlist(
             client_id = f"client_{client_hash}"
 
         # Only register client if not already registered for this stream
-        if client_id not in stream_manager.clients or stream_manager.clients[client_id].stream_id != stream_id:
+        if (
+            client_id not in stream_manager.clients
+            or stream_manager.clients[client_id].stream_id != stream_id
+        ):
             client_info_data = get_client_info(request)
-            client_info = await stream_manager.register_client(
+            await stream_manager.register_client(
                 client_id,
                 stream_id,
                 user_agent=client_info_data["user_agent"],
                 ip_address=client_info_data["ip_address"],
-                username=client_info_data.get("username")
+                username=client_info_data.get("username"),
             )
 
             # Emit client connected event
@@ -1000,13 +1013,12 @@ async def get_hls_playlist(
                     "user_agent": client_info_data["user_agent"],
                     "ip_address": client_info_data["ip_address"],
                     "username": client_info_data.get("username"),
-                    "metadata": stream_info.metadata if stream_info else {}
-                }
+                    "metadata": stream_info.metadata if stream_info else {},
+                },
             )
             await event_manager.emit_event(event)
         else:
-            logger.debug(
-                f"Reusing existing client {client_id} for stream {stream_id}")
+            logger.debug(f"Reusing existing client {client_id} for stream {stream_id}")
 
         # Build base URL for playlist rewriting using RELATIVE URLs
         # This eliminates the need for PUBLIC_URL and works with ANY reverse proxy setup.
@@ -1023,28 +1035,33 @@ async def get_hls_playlist(
         #   - NGINX reverse proxy (https://example.com/m3u-proxy/...)
         #   - Any reverse proxy (Caddy, Traefik, AWS ELB, etc.)
         #   - VPN/Tailscale access (https://host.vpn.ts.net/m3u-proxy/...)
-        root_path = getattr(settings, 'ROOT_PATH', '')
+        root_path = getattr(settings, "ROOT_PATH", "")
 
         # Use relative URLs (just the path, no scheme/host)
         # This automatically works with whatever host/scheme the client used
         base_proxy_url = f"{root_path}/hls/{stream_id}"
 
         # Get processed playlist content (works for both direct HLS and transcoded HLS)
-        content = await stream_manager.get_playlist_content(stream_id, client_id, base_proxy_url)
+        content = await stream_manager.get_playlist_content(
+            stream_id, client_id, base_proxy_url
+        )
 
         if content is None:
-            raise HTTPException(
-                status_code=503, detail="Playlist not available")
+            raise HTTPException(status_code=503, detail="Playlist not available")
 
         # Check if this is a transcoded stream for logging purposes
         stream_info = stream_manager.streams.get(stream_id)
-        stream_type = "transcoded HLS" if stream_info and stream_info.is_transcoded else "direct HLS"
+        stream_type = (
+            "transcoded HLS"
+            if stream_info and stream_info.is_transcoded
+            else "direct HLS"
+        )
 
         logger.info(
-            f"Serving {stream_type} playlist to client {client_id} for stream {stream_id}")
+            f"Serving {stream_type} playlist to client {client_id} for stream {stream_id}"
+        )
 
-        response = Response(
-            content=content, media_type="application/vnd.apple.mpegurl")
+        response = Response(content=content, media_type="application/vnd.apple.mpegurl")
         # Add client ID to response headers for tracking
         response.headers["X-Client-ID"] = client_id
         response.headers["X-Stream-ID"] = stream_id
@@ -1067,7 +1084,7 @@ async def get_hls_segment(
     stream_id: str,
     request: Request,
     client_id: str = Query(..., description="Client ID"),
-    url: str = Query(..., description="The segment URL to proxy")
+    url: str = Query(..., description="The segment URL to proxy"),
 ):
     """Proxy HLS segment for a client"""
     try:
@@ -1075,37 +1092,37 @@ async def get_hls_segment(
         segment_url = unquote(url)
 
         # Get range header if present
-        range_header = request.headers.get('range')
+        range_header = request.headers.get("range")
 
         # Extract additional headers from query parameters (h_ prefixed)
         additional_headers = {}
         for key, value in request.query_params.items():
             if key.startswith("h_"):
-                header_name = key[2:].replace('_', '-').lower()
+                header_name = key[2:].replace("_", "-").lower()
                 # Special handling for common headers
-                if header_name == 'user-agent':
-                    header_name = 'User-Agent'
-                elif header_name == 'referer':
-                    header_name = 'Referer'
-                elif header_name == 'origin':
-                    header_name = 'Origin'
-                elif header_name == 'accept':
-                    header_name = 'Accept'
-                elif header_name == 'accept-encoding':
-                    header_name = 'Accept-Encoding'
-                elif header_name == 'accept-language':
-                    header_name = 'Accept-Language'
+                if header_name == "user-agent":
+                    header_name = "User-Agent"
+                elif header_name == "referer":
+                    header_name = "Referer"
+                elif header_name == "origin":
+                    header_name = "Origin"
+                elif header_name == "accept":
+                    header_name = "Accept"
+                elif header_name == "accept-encoding":
+                    header_name = "Accept-Encoding"
+                elif header_name == "accept-language":
+                    header_name = "Accept-Language"
 
                 additional_headers[header_name] = value
-                logger.info(
-                    f"Extracted header from query param: {header_name}={value}")
+                logger.info(f"Extracted header from query param: {header_name}={value}")
 
         # For HLS segments, we don't create separate streams for each segment URL
         # Instead, we use the parent HLS stream_id and handle segment fetching directly
         # This prevents creating many individual streams for each .ts segment
 
         logger.info(
-            f"HLS segment request - Stream: {stream_id}, Client: {client_id}, URL: {segment_url}")
+            f"HLS segment request - Stream: {stream_id}, Client: {client_id}, URL: {segment_url}"
+        )
 
         # Register client for the parent HLS stream (not the segment)
         client_info_data = get_client_info(request)
@@ -1114,7 +1131,7 @@ async def get_hls_segment(
             stream_id,  # Use the parent HLS stream ID
             user_agent=client_info_data["user_agent"],
             ip_address=client_info_data["ip_address"],
-            username=client_info_data.get("username")
+            username=client_info_data.get("username"),
         )
 
         # For HLS segments, we need to fetch the segment directly without creating a separate stream
@@ -1124,7 +1141,7 @@ async def get_hls_segment(
                 stream_id,  # Parent HLS stream
                 client_id,
                 segment_url,  # The actual segment URL to fetch
-                range_header
+                range_header,
             )
             return response
         except Exception as stream_error:
@@ -1133,7 +1150,7 @@ async def get_hls_segment(
             return Response(
                 content=b"Stream unavailable",
                 status_code=503,
-                headers={"Content-Type": "text/plain"}
+                headers={"Content-Type": "text/plain"},
             )
 
     except Exception as e:
@@ -1150,7 +1167,7 @@ async def get_hls_segment_ts(
     stream_id: str,
     request: Request,
     client_id: str = Query(..., description="Client ID"),
-    url: str = Query(..., description="The segment URL to proxy")
+    url: str = Query(..., description="The segment URL to proxy"),
 ):
     """Proxy HLS segment with .ts extension for better ffplay compatibility"""
     return await get_hls_segment(stream_id, request, client_id, url)
@@ -1161,7 +1178,8 @@ async def get_direct_stream(
     request: Request,
     stream_id: str = Depends(resolve_stream_id),
     client_id: Optional[str] = Query(
-        None, description="Client ID (auto-generated if not provided)")
+        None, description="Client ID (auto-generated if not provided)"
+    ),
 ):
     """Serve direct streams (.ts, .mp4, .mkv, etc.) for IPTV"""
     try:
@@ -1179,29 +1197,38 @@ async def get_direct_stream(
             client_id = f"client_{client_hash}"
 
         # Only register client if not already registered for this stream
-        if client_id not in stream_manager.clients or stream_manager.clients[client_id].stream_id != stream_id:
+        if (
+            client_id not in stream_manager.clients
+            or stream_manager.clients[client_id].stream_id != stream_id
+        ):
             client_info_data = get_client_info(request)
             await stream_manager.register_client(
                 client_id,
                 stream_id,
                 user_agent=client_info_data["user_agent"],
                 ip_address=client_info_data["ip_address"],
-                username=client_info_data.get("username")
+                username=client_info_data.get("username"),
             )
             logger.info(
-                f"Registered client {client_id} for stream {stream_id}" + (f" (username: {client_info_data.get('username')})" if client_info_data.get('username') else ""))
+                f"Registered client {client_id} for stream {stream_id}"
+                + (
+                    f" (username: {client_info_data.get('username')})"
+                    if client_info_data.get("username")
+                    else ""
+                )
+            )
         else:
-            logger.debug(
-                f"Reusing existing client {client_id} for stream {stream_id}")
+            logger.debug(f"Reusing existing client {client_id} for stream {stream_id}")
 
         # Determine content type
         content_type = get_content_type(stream_url)
 
         # Get range header if present
-        range_header = request.headers.get('range')
+        range_header = request.headers.get("range")
 
         logger.info(
-            f"Serving direct stream to client {client_id} for stream {stream_id}")
+            f"Serving direct stream to client {client_id} for stream {stream_id}"
+        )
         logger.info(f"Stream URL: {stream_url}")
         logger.info(f"Content-Type: {content_type}")
         if range_header:
@@ -1210,22 +1237,19 @@ async def get_direct_stream(
         # Check if this is a transcoded stream
         if stream_info.is_transcoded:
             logger.info(
-                f"Using transcoded stream for {stream_id} with profile: {stream_info.transcode_profile}")
+                f"Using transcoded stream for {stream_id} with profile: {stream_info.transcode_profile}"
+            )
 
             # For transcoded streams outputting to pipe:1 or other non-HLS formats,
             # use streamed transcoding path
             return await stream_manager.stream_transcoded(
-                stream_id,
-                client_id,
-                range_header=range_header
+                stream_id, client_id, range_header=range_header
             )
         else:
             # Use direct proxy for continuous streams
             # This provides true byte-for-byte proxying with per-client connections
             return await stream_manager.stream_continuous_direct(
-                stream_id,
-                client_id,
-                range_header=range_header
+                stream_id, client_id, range_header=range_header
             )
 
     except HTTPException:
@@ -1240,7 +1264,8 @@ async def head_direct_stream(
     request: Request,
     stream_id: str = Depends(resolve_stream_id),
     client_id: Optional[str] = Query(
-        None, description="Client ID (auto-generated if not provided)")
+        None, description="Client ID (auto-generated if not provided)"
+    ),
 ):
     """Handle HEAD requests for direct streams (needed for MP4 duration/seeking)
 
@@ -1255,7 +1280,7 @@ async def head_direct_stream(
         content_type = get_content_type(stream_url)
 
         # Check for Range header
-        range_header = request.headers.get('range')
+        range_header = request.headers.get("range")
 
         # Determine if strict mode is enabled (global or per-stream)
         strict_mode_enabled = settings.STRICT_LIVE_TS or stream_info.strict_live_ts
@@ -1264,7 +1289,8 @@ async def head_direct_stream(
         # without hitting upstream to prevent redundant requests and connection issues
         if strict_mode_enabled and stream_info.is_live_continuous:
             logger.info(
-                f"STRICT MODE: HEAD request for live TS stream {stream_id} - returning quick response without upstream hit")
+                f"STRICT MODE: HEAD request for live TS stream {stream_id} - returning quick response without upstream hit"
+            )
 
             response_headers = {
                 "Content-Type": content_type,
@@ -1276,33 +1302,36 @@ async def head_direct_stream(
                 "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
                 "Access-Control-Allow-Headers": "*",
                 "Access-Control-Expose-Headers": "*",
-                "Connection": "keep-alive"
+                "Connection": "keep-alive",
             }
 
             # Do NOT include Content-Length for live streams
             return Response(
                 content=None,
                 status_code=200,  # Always 200 for live streams, never 206
-                headers=response_headers
+                headers=response_headers,
             )
 
         # For HEAD requests, we need to make a HEAD request to the origin server
         # to get metadata like Content-Length for MP4 files
         headers = {
-            'User-Agent': stream_info.user_agent or 'Mozilla/5.0 (compatible)',
-            'Accept': '*/*',
+            "User-Agent": stream_info.user_agent or "Mozilla/5.0 (compatible)",
+            "Accept": "*/*",
         }
 
         # If this is a range request, add the Range header
         if range_header:
-            headers['Range'] = range_header
+            headers["Range"] = range_header
             logger.info(
-                f"HEAD range request for stream {stream_id}: {stream_url}, Range: {range_header}")
+                f"HEAD range request for stream {stream_id}: {stream_url}, Range: {range_header}"
+            )
         else:
             logger.info(f"HEAD request for stream {stream_id}: {stream_url}")
 
         try:
-            async with stream_manager.http_client.stream('HEAD', stream_url, headers=headers, follow_redirects=True) as response:
+            async with stream_manager.http_client.stream(
+                "HEAD", stream_url, headers=headers, follow_redirects=True
+            ) as response:
                 response.raise_for_status()
 
                 # Build response headers based on origin server response
@@ -1315,7 +1344,7 @@ async def head_direct_stream(
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
                     "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Expose-Headers": "*"
+                    "Access-Control-Expose-Headers": "*",
                 }
 
                 # Determine status code
@@ -1323,22 +1352,27 @@ async def head_direct_stream(
                 if range_header and response.status_code == 206:
                     status_code = 206
                     # Forward range-related headers
-                    if 'content-range' in response.headers:
-                        response_headers["Content-Range"] = response.headers['content-range']
+                    if "content-range" in response.headers:
+                        response_headers["Content-Range"] = response.headers[
+                            "content-range"
+                        ]
 
                 # Forward important headers from origin
-                if 'content-length' in response.headers:
-                    response_headers["Content-Length"] = response.headers['content-length']
+                if "content-length" in response.headers:
+                    response_headers["Content-Length"] = response.headers[
+                        "content-length"
+                    ]
                     logger.info(
-                        f"Content-Length for {stream_id}: {response.headers['content-length']}")
+                        f"Content-Length for {stream_id}: {response.headers['content-length']}"
+                    )
 
-                if 'last-modified' in response.headers:
-                    response_headers["Last-Modified"] = response.headers['last-modified']
+                if "last-modified" in response.headers:
+                    response_headers["Last-Modified"] = response.headers[
+                        "last-modified"
+                    ]
 
                 return Response(
-                    content=None,
-                    status_code=status_code,
-                    headers=response_headers
+                    content=None, status_code=status_code, headers=response_headers
                 )
 
         except Exception as e:
@@ -1354,8 +1388,8 @@ async def head_direct_stream(
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
                     "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Expose-Headers": "*"
-                }
+                    "Access-Control-Expose-Headers": "*",
+                },
             )
 
     except HTTPException:
@@ -1365,7 +1399,9 @@ async def head_direct_stream(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/hls/{stream_id}/clients/{client_id}", dependencies=[Depends(verify_token)])
+@app.delete(
+    "/hls/{stream_id}/clients/{client_id}", dependencies=[Depends(verify_token)]
+)
 async def disconnect_client(stream_id: str, client_id: str):
     """Disconnect a specific client"""
     try:
@@ -1398,12 +1434,14 @@ async def get_detailed_stats():
         stats = stream_manager.get_stats()
         return {
             "proxy_stats": stats["proxy_stats"],
-            "connection_pool_stats": stats["proxy_stats"].get("connection_pool_stats", {}),
+            "connection_pool_stats": stats["proxy_stats"].get(
+                "connection_pool_stats", {}
+            ),
             "failover_stats": stats["proxy_stats"].get("failover_stats", {}),
             "performance_metrics": stats["proxy_stats"].get("performance_metrics", {}),
             "error_stats": stats["proxy_stats"].get("error_stats", {}),
             "stream_count": len(stats["streams"]),
-            "client_count": len(stats["clients"])
+            "client_count": len(stats["clients"]),
         }
     except Exception as e:
         logger.error(f"Error getting detailed stats: {e}")
@@ -1421,7 +1459,7 @@ async def get_performance_stats():
             "performance_metrics": proxy_stats.get("performance_metrics", {}),
             "failover_stats": proxy_stats.get("failover_stats", {}),
             "error_stats": proxy_stats.get("error_stats", {}),
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
         logger.error(f"Error getting performance stats: {e}")
@@ -1433,10 +1471,7 @@ async def get_stream_stats():
     """Get stream-specific statistics"""
     try:
         stats = stream_manager.get_stats()
-        return {
-            "total_streams": len(stats["streams"]),
-            "streams": stats["streams"]
-        }
+        return {"total_streams": len(stats["streams"]), "streams": stats["streams"]}
     except Exception as e:
         logger.error(f"Error getting stream stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1447,10 +1482,7 @@ async def get_client_stats():
     """Get client-specific statistics"""
     try:
         stats = stream_manager.get_stats()
-        return {
-            "total_clients": len(stats["clients"]),
-            "clients": stats["clients"]
-        }
+        return {"total_clients": len(stats["clients"]), "clients": stats["clients"]}
     except Exception as e:
         logger.error(f"Error getting client stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1467,10 +1499,7 @@ async def list_streams():
     """List all active streams"""
     try:
         stats = stream_manager.get_stats()
-        return {
-            "streams": stats["streams"],
-            "total": len(stats["streams"])
-        }
+        return {"streams": stats["streams"], "total": len(stats["streams"])}
     except Exception as e:
         logger.error(f"Error listing streams: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1481,7 +1510,8 @@ async def get_streams_by_metadata(
     field: str = Query(..., description="Metadata field to filter by"),
     value: str = Query(..., description="Value to match"),
     active_only: bool = Query(
-        True, description="Only return streams with active clients")
+        True, description="Only return streams with active clients"
+    ),
 ):
     """Get active streams filtered by any metadata field with real-time status"""
     matching_streams = []
@@ -1499,8 +1529,10 @@ async def get_streams_by_metadata(
         active_client_count = 0
         if stream_id in stream_manager.stream_clients:
             for client_id in stream_manager.stream_clients[stream_id]:
-                if (client_id in stream_manager.clients and
-                        stream_manager.clients[client_id].is_connected):
+                if (
+                    client_id in stream_manager.clients
+                    and stream_manager.clients[client_id].is_connected
+                ):
                     active_client_count += 1
 
         # Check if stream has active clients (if requested)
@@ -1511,22 +1543,30 @@ async def get_streams_by_metadata(
         if not stream_info.is_active:
             continue
 
-        matching_streams.append({
-            'stream_id': stream_id,
-            'client_count': active_client_count,  # Use active count, not total count
-            'metadata': stream_info.metadata,
-            'last_access': stream_info.last_access.isoformat(),
-            'is_active': stream_info.is_active,
-            'url': stream_info.current_url or stream_info.original_url,
-            'stream_type': 'Transcoding' if stream_info.metadata.get('transcoding') else ('HLS' if stream_info.is_hls else ('VOD' if stream_info.is_vod else 'Live Continuous'))
-        })
+        matching_streams.append(
+            {
+                "stream_id": stream_id,
+                "client_count": active_client_count,  # Use active count, not total count
+                "metadata": stream_info.metadata,
+                "last_access": stream_info.last_access.isoformat(),
+                "is_active": stream_info.is_active,
+                "url": stream_info.current_url or stream_info.original_url,
+                "stream_type": "Transcoding"
+                if stream_info.metadata.get("transcoding")
+                else (
+                    "HLS"
+                    if stream_info.is_hls
+                    else ("VOD" if stream_info.is_vod else "Live Continuous")
+                ),
+            }
+        )
 
     return {
-        'filter': {'field': field, 'value': value},
-        'active_only': active_only,
-        'matching_streams': matching_streams,
-        'total_matching': len(matching_streams),
-        'total_clients': sum(stream['client_count'] for stream in matching_streams)
+        "filter": {"field": field, "value": value},
+        "active_only": active_only,
+        "matching_streams": matching_streams,
+        "total_matching": len(matching_streams),
+        "total_clients": sum(stream["client_count"] for stream in matching_streams),
     }
 
 
@@ -1539,7 +1579,8 @@ async def get_stream_info(stream_id: str):
 
         stats = stream_manager.get_stats()
         stream_stats = next(
-            (s for s in stats["streams"] if s["stream_id"] == stream_id), None)
+            (s for s in stats["streams"] if s["stream_id"] == stream_id), None
+        )
 
         if not stream_stats:
             raise HTTPException(status_code=404, detail="Stream not found")
@@ -1548,13 +1589,14 @@ async def get_stream_info(stream_id: str):
         active_stream_clients = []
         if stream_id in stream_manager.stream_clients:
             for client_id in stream_manager.stream_clients[stream_id]:
-                if (client_id in stream_manager.clients and
-                        stream_manager.clients[client_id].is_connected):
+                if (
+                    client_id in stream_manager.clients
+                    and stream_manager.clients[client_id].is_connected
+                ):
                     # Find the client in stats
                     client_stats = next(
-                        (c for c in stats["clients"]
-                         if c["client_id"] == client_id),
-                        None
+                        (c for c in stats["clients"] if c["client_id"] == client_id),
+                        None,
                     )
                     if client_stats:
                         active_stream_clients.append(client_stats)
@@ -1562,7 +1604,7 @@ async def get_stream_info(stream_id: str):
         return {
             "stream": stream_stats,
             "clients": active_stream_clients,
-            "client_count": len(active_stream_clients)
+            "client_count": len(active_stream_clients),
         }
     except HTTPException:
         raise
@@ -1578,7 +1620,8 @@ async def delete_oldest_stream_by_metadata(
     field: str = Query(..., description="Metadata field to filter by"),
     value: str = Query(..., description="Value to match"),
     exclude_channel_id: Optional[str] = Query(
-        None, description="Channel ID to exclude from deletion (keep this stream)")
+        None, description="Channel ID to exclude from deletion (keep this stream)"
+    ),
 ):
     """
     Delete the OLDEST stream matching a specific metadata field/value.
@@ -1600,11 +1643,16 @@ async def delete_oldest_stream_by_metadata(
             # Check if this stream matches the filter criteria
             if field in metadata and str(metadata[field]) == str(value):
                 # Check if this stream should be excluded
-                if exclude_channel_id and str(metadata.get('id')) == str(exclude_channel_id):
+                if exclude_channel_id and str(metadata.get("id")) == str(
+                    exclude_channel_id
+                ):
                     continue
 
                 # Track the oldest stream
-                if oldest_created_at is None or stream_info.created_at < oldest_created_at:
+                if (
+                    oldest_created_at is None
+                    or stream_info.created_at < oldest_created_at
+                ):
                     oldest_stream_id = stream_id
                     oldest_created_at = stream_info.created_at
 
@@ -1613,25 +1661,27 @@ async def delete_oldest_stream_by_metadata(
             return {
                 "message": f"No streams found matching {field}={value}",
                 "deleted_stream": None,
-                "deleted_count": 0
+                "deleted_count": 0,
             }
 
         # Delete the oldest stream
         stream_info = stream_manager.streams[oldest_stream_id]
         logger.info(
-            f"Deleting oldest stream {oldest_stream_id} (created at {oldest_created_at}) matching {field}={value}")
+            f"Deleting oldest stream {oldest_stream_id} (created at {oldest_created_at}) matching {field}={value}"
+        )
 
         # For transcoded streams, force stop the FFmpeg process immediately
         if stream_info.is_transcoded and stream_manager.pooled_manager:
             try:
                 stream_key = stream_manager.pooled_manager._generate_stream_key(
                     stream_info.current_url or stream_info.original_url,
-                    stream_info.transcode_profile or "default"
+                    stream_info.transcode_profile or "default",
                 )
                 await stream_manager.pooled_manager.force_stop_stream(stream_key)
             except Exception as e:
                 logger.warning(
-                    f"Error stopping transcoding for stream {oldest_stream_id}: {e}")
+                    f"Error stopping transcoding for stream {oldest_stream_id}: {e}"
+                )
 
         # Clean up all clients for this stream
         if oldest_stream_id in stream_manager.stream_clients:
@@ -1642,14 +1692,22 @@ async def delete_oldest_stream_by_metadata(
         # Emit stream_stopped event (skip if already emitted during client cleanup)
         if not stream_info.stream_stopped_emitted:
             stream_info.stream_stopped_emitted = True
-            await stream_manager._emit_event("STREAM_STOPPED", oldest_stream_id, {
-                "reason": "oldest_stream_deletion",
-                "filter_field": field,
-                "filter_value": value,
-                "was_transcoded": stream_info.is_transcoded,
-                "stream_age_seconds": (datetime.now(timezone.utc) - oldest_created_at).total_seconds() if oldest_created_at else None,
-                "metadata": stream_info.metadata
-            })
+            await stream_manager._emit_event(
+                "STREAM_STOPPED",
+                oldest_stream_id,
+                {
+                    "reason": "oldest_stream_deletion",
+                    "filter_field": field,
+                    "filter_value": value,
+                    "was_transcoded": stream_info.is_transcoded,
+                    "stream_age_seconds": (
+                        datetime.now(timezone.utc) - oldest_created_at
+                    ).total_seconds()
+                    if oldest_created_at
+                    else None,
+                    "metadata": stream_info.metadata,
+                },
+            )
 
         # Remove stream
         if oldest_stream_id in stream_manager.streams:
@@ -1662,8 +1720,12 @@ async def delete_oldest_stream_by_metadata(
         return {
             "message": f"Deleted oldest stream matching {field}={value}",
             "deleted_stream": oldest_stream_id,
-            "stream_age_seconds": (datetime.now(timezone.utc) - oldest_created_at).total_seconds() if oldest_created_at else None,
-            "deleted_count": 1
+            "stream_age_seconds": (
+                datetime.now(timezone.utc) - oldest_created_at
+            ).total_seconds()
+            if oldest_created_at
+            else None,
+            "deleted_count": 1,
         }
     except HTTPException:
         raise
@@ -1677,7 +1739,8 @@ async def delete_streams_by_metadata(
     field: str = Query(..., description="Metadata field to filter by"),
     value: str = Query(..., description="Value to match"),
     exclude_channel_id: Optional[str] = Query(
-        None, description="Channel ID to exclude from deletion (keep this stream)")
+        None, description="Channel ID to exclude from deletion (keep this stream)"
+    ),
 ):
     """
     Delete all streams matching a specific metadata field/value.
@@ -1701,28 +1764,29 @@ async def delete_streams_by_metadata(
             # Check if this stream matches the filter criteria
             if field in metadata and str(metadata[field]) == str(value):
                 # Check if this stream should be excluded (e.g., keeping the new channel)
-                if exclude_channel_id and metadata.get('id') == str(exclude_channel_id):
-                    skipped_streams.append({
-                        "stream_id": stream_id,
-                        "reason": "excluded_by_channel_id"
-                    })
+                if exclude_channel_id and metadata.get("id") == str(exclude_channel_id):
+                    skipped_streams.append(
+                        {"stream_id": stream_id, "reason": "excluded_by_channel_id"}
+                    )
                     continue
 
                 # Delete this stream
-                logger.info(
-                    f"Deleting stream {stream_id} matching {field}={value}")
+                logger.info(f"Deleting stream {stream_id} matching {field}={value}")
 
                 # For transcoded streams, force stop the FFmpeg process immediately
                 if stream_info.is_transcoded and stream_manager.pooled_manager:
                     try:
                         stream_key = stream_manager.pooled_manager._generate_stream_key(
                             stream_info.current_url or stream_info.original_url,
-                            stream_info.transcode_profile or "default"
+                            stream_info.transcode_profile or "default",
                         )
-                        await stream_manager.pooled_manager.force_stop_stream(stream_key)
+                        await stream_manager.pooled_manager.force_stop_stream(
+                            stream_key
+                        )
                     except Exception as e:
                         logger.warning(
-                            f"Error stopping transcoding for stream {stream_id}: {e}")
+                            f"Error stopping transcoding for stream {stream_id}: {e}"
+                        )
 
                 # Clean up all clients for this stream
                 if stream_id in stream_manager.stream_clients:
@@ -1733,13 +1797,17 @@ async def delete_streams_by_metadata(
                 # Emit stream_stopped event (skip if already emitted during client cleanup)
                 if not stream_info.stream_stopped_emitted:
                     stream_info.stream_stopped_emitted = True
-                    await stream_manager._emit_event("STREAM_STOPPED", stream_id, {
-                        "reason": "metadata_filter_deletion",
-                        "filter_field": field,
-                        "filter_value": value,
-                        "was_transcoded": stream_info.is_transcoded,
-                        "metadata": stream_info.metadata
-                    })
+                    await stream_manager._emit_event(
+                        "STREAM_STOPPED",
+                        stream_id,
+                        {
+                            "reason": "metadata_filter_deletion",
+                            "filter_field": field,
+                            "filter_value": value,
+                            "was_transcoded": stream_info.is_transcoded,
+                            "metadata": stream_info.metadata,
+                        },
+                    )
 
                 # Remove stream
                 if stream_id in stream_manager.streams:
@@ -1754,7 +1822,7 @@ async def delete_streams_by_metadata(
             "message": f"Deleted {len(deleted_streams)} stream(s) matching {field}={value}",
             "deleted_streams": deleted_streams,
             "skipped_streams": skipped_streams,
-            "deleted_count": len(deleted_streams)
+            "deleted_count": len(deleted_streams),
         }
     except HTTPException:
         raise
@@ -1777,10 +1845,9 @@ async def delete_stream(stream_id: str):
             logger.info(f"Force stopping transcoded stream {stream_id}")
             # Get the stream key used by pooled manager
             # This is typically based on URL and profile
-            from pooled_stream_manager import PooledStreamManager
             stream_key = stream_manager.pooled_manager._generate_stream_key(
                 stream_info.current_url or stream_info.original_url,
-                stream_info.transcode_profile or "default"
+                stream_info.transcode_profile or "default",
             )
             await stream_manager.pooled_manager.force_stop_stream(stream_key)
 
@@ -1793,11 +1860,15 @@ async def delete_stream(stream_id: str):
         # Emit stream_stopped event before removing the stream (skip if already emitted during client cleanup)
         if not stream_info.stream_stopped_emitted:
             stream_info.stream_stopped_emitted = True
-            await stream_manager._emit_event("STREAM_STOPPED", stream_id, {
-                "reason": "manual_deletion",
-                "was_transcoded": stream_info.is_transcoded,
-                "metadata": stream_info.metadata
-            })
+            await stream_manager._emit_event(
+                "STREAM_STOPPED",
+                stream_id,
+                {
+                    "reason": "manual_deletion",
+                    "was_transcoded": stream_info.is_transcoded,
+                    "metadata": stream_info.metadata,
+                },
+            )
 
         # Remove stream
         if stream_id in stream_manager.streams:
@@ -1826,11 +1897,12 @@ async def trigger_failover(stream_id: str):
 
         # Check if any failover mechanism is available
         has_failovers = bool(
-            stream_info.failover_resolver_url or stream_info.failover_urls)
+            stream_info.failover_resolver_url or stream_info.failover_urls
+        )
         if not has_failovers:
             raise HTTPException(
                 status_code=400,
-                detail="No failover mechanism configured for this stream (neither failover_urls nor failover_resolver_url)"
+                detail="No failover mechanism configured for this stream (neither failover_urls nor failover_resolver_url)",
             )
 
         # Trigger failover which will:
@@ -1847,16 +1919,18 @@ async def trigger_failover(stream_id: str):
                 "failover_index": stream_info.current_failover_index,
                 "failover_attempts": stream_info.failover_attempts,
                 "active_clients": len(stream_info.connected_clients),
-                "stream_type": "Transcoded" if stream_info.is_transcoded else (
-                    "HLS" if stream_info.is_hls else (
-                        "VOD" if stream_info.is_vod else "Live Continuous"
-                    )
-                )
+                "stream_type": "Transcoded"
+                if stream_info.is_transcoded
+                else (
+                    "HLS"
+                    if stream_info.is_hls
+                    else ("VOD" if stream_info.is_vod else "Live Continuous")
+                ),
             }
         else:
             raise HTTPException(
                 status_code=500,
-                detail="Failover failed - no working failover URLs available"
+                detail="Failover failed - no working failover URLs available",
             )
     except HTTPException:
         raise
@@ -1878,24 +1952,22 @@ async def health_check():
 
         return {
             "status": "healthy",
-            "root_path": getattr(settings, 'ROOT_PATH', '/m3u-proxy'),
+            "root_path": getattr(settings, "ROOT_PATH", "/m3u-proxy"),
             "version": VERSION,
             "uptime_seconds": proxy_stats["uptime_seconds"],
             "active_streams": proxy_stats["active_streams"],
             "active_clients": proxy_stats["active_clients"],
             "total_bytes_served": proxy_stats["total_bytes_served"],
-            "stats": proxy_stats
+            "stats": proxy_stats,
         }
     except Exception as e:
         logger.error(f"Error in health check: {e}")
-        return {
-            "status": "error",
-            "error": str(e)
-        }, 500
+        return {"status": "error", "error": str(e)}, 500
 
 
 class TestConnectionRequest(BaseModel):
     """Request model for testing connectivity to an external URL"""
+
     url: str
 
 
@@ -1908,7 +1980,7 @@ async def test_url_connectivity(request: TestConnectionRequest):
     import httpx
 
     # Ensure URL doesn't have trailing slash
-    test_url = request.url.rstrip('/')
+    test_url = request.url.rstrip("/")
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1919,14 +1991,14 @@ async def test_url_connectivity(request: TestConnectionRequest):
                     "success": True,
                     "message": f"Successfully connected to {test_url}",
                     "status_code": response.status_code,
-                    "url_tested": test_url
+                    "url_tested": test_url,
                 }
             else:
                 return {
                     "success": False,
-                    "message": f"URL returned non-200 status code",
+                    "message": "URL returned non-200 status code",
                     "status_code": response.status_code,
-                    "url_tested": test_url
+                    "url_tested": test_url,
                 }
     except httpx.ConnectError as e:
         logger.warning(f"Connection error testing URL {test_url}: {e}")
@@ -1934,15 +2006,15 @@ async def test_url_connectivity(request: TestConnectionRequest):
             "success": False,
             "message": f"Connection failed: Unable to connect to {request.url}",
             "error": str(e),
-            "url_tested": test_url
+            "url_tested": test_url,
         }
     except httpx.TimeoutException as e:
         logger.warning(f"Timeout testing URL {test_url}: {e}")
         return {
             "success": False,
-            "message": f"Connection timed out after 10 seconds",
+            "message": "Connection timed out after 10 seconds",
             "error": str(e),
-            "url_tested": test_url
+            "url_tested": test_url,
         }
     except Exception as e:
         logger.error(f"Error testing URL {test_url}: {e}")
@@ -1950,7 +2022,7 @@ async def test_url_connectivity(request: TestConnectionRequest):
             "success": False,
             "message": f"Error testing connection: {str(e)}",
             "error": str(e),
-            "url_tested": test_url
+            "url_tested": test_url,
         }
 
 
@@ -1965,7 +2037,7 @@ async def add_webhook(webhook: WebhookConfig):
         return {
             "message": "Webhook added successfully",
             "webhook_url": str(webhook.url),
-            "events": [event.value for event in webhook.events]
+            "events": [event.value for event in webhook.events],
         }
     except Exception as e:
         logger.error(f"Error adding webhook: {e}")
@@ -1981,7 +2053,7 @@ async def list_webhooks():
                 "url": str(wh.url),
                 "events": [event.value for event in wh.events],
                 "timeout": wh.timeout,
-                "retry_attempts": wh.retry_attempts
+                "retry_attempts": wh.retry_attempts,
             }
             for wh in event_manager.webhooks
         ]
@@ -1992,7 +2064,9 @@ async def list_webhooks():
 
 
 @app.delete("/webhooks", dependencies=[Depends(verify_token)])
-async def remove_webhook(webhook_url: str = Query(..., description="Webhook URL to remove")):
+async def remove_webhook(
+    webhook_url: str = Query(..., description="Webhook URL to remove"),
+):
     """Remove a webhook configuration"""
     try:
         removed = event_manager.remove_webhook(webhook_url)
@@ -2008,7 +2082,9 @@ async def remove_webhook(webhook_url: str = Query(..., description="Webhook URL 
 
 
 @app.post("/webhooks/test", dependencies=[Depends(verify_token)])
-async def test_webhook(webhook_url: str = Query(..., description="Webhook URL to test")):
+async def test_webhook(
+    webhook_url: str = Query(..., description="Webhook URL to test"),
+):
     """Send a test event to a webhook"""
     try:
         # Create test event
@@ -2018,8 +2094,8 @@ async def test_webhook(webhook_url: str = Query(..., description="Webhook URL to
             data={
                 "test": True,
                 "message": "This is a test webhook event",
-                "primary_url": "http://example.com/test.m3u8"
-            }
+                "primary_url": "http://example.com/test.m3u8",
+            },
         )
 
         # Find webhook and send test
@@ -2035,13 +2111,14 @@ async def test_webhook(webhook_url: str = Query(..., description="Webhook URL to
 
         return {
             "message": f"Test event sent to {webhook_url}",
-            "event_id": test_event.event_id
+            "event_id": test_event.event_id,
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error testing webhook: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ============================================================================
 # Network Broadcast Endpoints
@@ -2050,6 +2127,7 @@ async def test_webhook(webhook_url: str = Query(..., description="Webhook URL to
 
 class BroadcastStartRequest(BaseModel):
     """Request model for starting a network broadcast."""
+
     stream_url: str
     seek_seconds: int = 0
     duration_seconds: int = 0  # 0 = unlimited
@@ -2069,40 +2147,41 @@ class BroadcastStartRequest(BaseModel):
     callback_url: Optional[str] = None
     headers: Optional[Dict[str, str]] = None
 
-    @field_validator('stream_url')
+    @field_validator("stream_url")
     @classmethod
     def validate_stream_url(cls, v):
         return validate_url(v)
 
-    @field_validator('callback_url')
+    @field_validator("callback_url")
     @classmethod
     def validate_callback_url(cls, v):
         if v is not None:
             return validate_url(v)
         return v
 
-    @field_validator('headers')
+    @field_validator("headers")
     @classmethod
     def validate_headers(cls, v):
         """Ensure headers is a dictionary of string keys and values; trim whitespace."""
         if v is None:
             return v
         if not isinstance(v, dict):
-            raise ValueError(
-                'headers must be an object/dict of header name -> value')
+            raise ValueError("headers must be an object/dict of header name -> value")
         cleaned = {}
         for k, val in v.items():
             if not isinstance(k, str):
-                raise ValueError('header names must be strings')
+                raise ValueError("header names must be strings")
             if not isinstance(val, (str, int, float, bool)):
                 raise ValueError(
-                    'header values must be strings or convertible to strings')
+                    "header values must be strings or convertible to strings"
+                )
             cleaned[str(k).strip()] = str(val).strip()
         return cleaned
 
 
 class BroadcastStatusResponse(BaseModel):
     """Response model for broadcast status."""
+
     network_id: str
     status: str
     current_segment_number: int
@@ -2114,8 +2193,7 @@ class BroadcastStatusResponse(BaseModel):
 
 @app.post("/broadcast/{network_id}/start", dependencies=[Depends(verify_token)])
 async def start_broadcast(
-    network_id: str,
-    request: BroadcastStartRequest
+    network_id: str, request: BroadcastStartRequest
 ) -> BroadcastStatusResponse:
     """
     Start or transition a network broadcast.
@@ -2146,7 +2224,7 @@ async def start_broadcast(
             preset=request.preset,
             hwaccel=request.hwaccel,
             callback_url=request.callback_url,
-            headers=request.headers
+            headers=request.headers,
         )
         status = await broadcast_manager.start_broadcast(config)
         return BroadcastStatusResponse(
@@ -2156,7 +2234,7 @@ async def start_broadcast(
             started_at=status.started_at,
             stream_url=status.stream_url,
             ffmpeg_pid=status.ffmpeg_pid,
-            error_message=status.error_message
+            error_message=status.error_message,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2181,7 +2259,7 @@ async def stop_broadcast(network_id: str) -> dict:
             "message": "Broadcast stopped",
             "network_id": network_id,
             "final_segment_number": status.current_segment_number,
-            "status": status.status
+            "status": status.status,
         }
     except HTTPException:
         raise
@@ -2208,8 +2286,8 @@ async def get_broadcast_playlist(network_id: str) -> Response:
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0",
-            "Access-Control-Allow-Origin": "*"
-        }
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
@@ -2229,8 +2307,8 @@ async def get_broadcast_segment(network_id: str, filename: str) -> FileResponse:
         media_type="video/MP2T",
         headers={
             "Cache-Control": "max-age=86400",  # Segments are immutable
-            "Access-Control-Allow-Origin": "*"
-        }
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
@@ -2252,7 +2330,7 @@ async def get_broadcast_status(network_id: str) -> BroadcastStatusResponse:
         started_at=status.started_at,
         stream_url=status.stream_url,
         ffmpeg_pid=status.ffmpeg_pid,
-        error_message=status.error_message
+        error_message=status.error_message,
     )
 
 
@@ -2270,11 +2348,11 @@ async def list_broadcasts() -> dict:
                 "current_segment_number": status.current_segment_number,
                 "started_at": status.started_at,
                 "stream_url": status.stream_url,
-                "ffmpeg_pid": status.ffmpeg_pid
+                "ffmpeg_pid": status.ffmpeg_pid,
             }
             for status in statuses.values()
         ],
-        "count": len(statuses)
+        "count": len(statuses),
     }
 
 
@@ -2291,8 +2369,7 @@ async def cleanup_broadcast(network_id: str) -> dict:
         if success:
             return {"message": f"Broadcast {network_id} cleaned up successfully"}
         else:
-            raise HTTPException(
-                status_code=500, detail="Failed to clean up broadcast")
+            raise HTTPException(status_code=500, detail="Failed to clean up broadcast")
     except Exception as e:
         logger.error(f"Error cleaning up broadcast {network_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

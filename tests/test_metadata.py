@@ -1,10 +1,11 @@
 # Add src to path first
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 from api import app, StreamCreateRequest
@@ -20,22 +21,26 @@ class TestMetadataFeature:
 
     @pytest.fixture
     def mock_stream_manager(self):
-        with patch('api.stream_manager') as mock:
+        with patch("api.stream_manager") as mock:
             mock.streams = {}
-            mock.get_or_create_stream = AsyncMock(return_value="test_stream_metadata_123")
-            mock.get_stats = Mock(return_value={
-                "proxy_stats": {
-                    "total_streams": 1,
-                    "active_streams": 1,
-                    "total_clients": 0,
-                    "active_clients": 0,
-                    "total_bytes_served": 0,
-                    "total_segments_served": 0,
-                    "uptime_seconds": 0
-                },
-                "streams": [],
-                "clients": []
-            })
+            mock.get_or_create_stream = AsyncMock(
+                return_value="test_stream_metadata_123"
+            )
+            mock.get_stats = Mock(
+                return_value={
+                    "proxy_stats": {
+                        "total_streams": 1,
+                        "active_streams": 1,
+                        "total_clients": 0,
+                        "active_clients": 0,
+                        "total_bytes_served": 0,
+                        "total_segments_served": 0,
+                        "uptime_seconds": 0,
+                    },
+                    "streams": [],
+                    "clients": [],
+                }
+            )
             yield mock
 
     def test_stream_create_request_with_metadata(self):
@@ -43,47 +48,35 @@ class TestMetadataFeature:
         request = StreamCreateRequest(
             url="https://example.com/stream.m3u8",
             user_agent="Test/1.0",
-            metadata={
-                "local_id": "test_123",
-                "channel_name": "Test Channel"
-            }
+            metadata={"local_id": "test_123", "channel_name": "Test Channel"},
         )
-        
+
         assert request.metadata is not None
         assert request.metadata["local_id"] == "test_123"
         assert request.metadata["channel_name"] == "Test Channel"
 
     def test_stream_create_request_without_metadata(self):
         """Test that StreamCreateRequest works without metadata (backward compatibility)"""
-        request = StreamCreateRequest(
-            url="https://example.com/stream.m3u8"
-        )
-        
+        request = StreamCreateRequest(url="https://example.com/stream.m3u8")
+
         assert request.metadata is None
 
     def test_metadata_validation_strings(self):
         """Test metadata validation with string values"""
         request = StreamCreateRequest(
             url="https://example.com/stream.m3u8",
-            metadata={
-                "key1": "value1",
-                "key2": "value2"
-            }
+            metadata={"key1": "value1", "key2": "value2"},
         )
-        
+
         assert request.metadata["key1"] == "value1"
         assert request.metadata["key2"] == "value2"
 
     def test_metadata_validation_integers(self):
         """Test metadata validation converts integers to strings"""
         request = StreamCreateRequest(
-            url="https://example.com/stream.m3u8",
-            metadata={
-                "count": 42,
-                "number": 100
-            }
+            url="https://example.com/stream.m3u8", metadata={"count": 42, "number": 100}
         )
-        
+
         # Values should be converted to strings
         assert request.metadata["count"] == "42"
         assert request.metadata["number"] == "100"
@@ -93,12 +86,9 @@ class TestMetadataFeature:
         """Test metadata validation converts booleans to strings"""
         request = StreamCreateRequest(
             url="https://example.com/stream.m3u8",
-            metadata={
-                "active": True,
-                "featured": False
-            }
+            metadata={"active": True, "featured": False},
         )
-        
+
         assert request.metadata["active"] == "True"
         assert request.metadata["featured"] == "False"
         assert isinstance(request.metadata["active"], str)
@@ -107,12 +97,9 @@ class TestMetadataFeature:
         """Test metadata validation converts floats to strings"""
         request = StreamCreateRequest(
             url="https://example.com/stream.m3u8",
-            metadata={
-                "rating": 4.5,
-                "score": 9.8
-            }
+            metadata={"rating": 4.5, "score": 9.8},
         )
-        
+
         assert request.metadata["rating"] == "4.5"
         assert request.metadata["score"] == "9.8"
         assert isinstance(request.metadata["rating"], str)
@@ -121,14 +108,9 @@ class TestMetadataFeature:
         """Test metadata validation with mixed types"""
         request = StreamCreateRequest(
             url="https://example.com/stream.m3u8",
-            metadata={
-                "name": "Test",
-                "count": 10,
-                "active": True,
-                "rating": 3.14
-            }
+            metadata={"name": "Test", "count": 10, "active": True, "rating": 3.14},
         )
-        
+
         # All values should be strings
         assert all(isinstance(v, str) for v in request.metadata.values())
         assert request.metadata["name"] == "Test"
@@ -141,19 +123,14 @@ class TestMetadataFeature:
         with pytest.raises(Exception):  # Should raise validation error
             StreamCreateRequest(
                 url="https://example.com/stream.m3u8",
-                metadata={
-                    "nested": {"key": "value"}
-                }
+                metadata={"nested": {"key": "value"}},
             )
 
     def test_metadata_validation_rejects_arrays(self):
         """Test that arrays in metadata are rejected"""
         with pytest.raises(Exception):  # Should raise validation error
             StreamCreateRequest(
-                url="https://example.com/stream.m3u8",
-                metadata={
-                    "list": [1, 2, 3]
-                }
+                url="https://example.com/stream.m3u8", metadata={"list": [1, 2, 3]}
             )
 
     def test_create_stream_endpoint_with_metadata(self, client, mock_stream_manager):
@@ -162,20 +139,17 @@ class TestMetadataFeature:
             "/streams",
             json={
                 "url": "https://example.com/stream.m3u8",
-                "metadata": {
-                    "local_id": "test_123",
-                    "channel_name": "Test Channel"
-                }
-            }
+                "metadata": {"local_id": "test_123", "channel_name": "Test Channel"},
+            },
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert "stream_id" in data
         assert "metadata" in data
         assert data["metadata"]["local_id"] == "test_123"
         assert data["metadata"]["channel_name"] == "Test Channel"
-        
+
         # Verify get_or_create_stream was called with metadata
         mock_stream_manager.get_or_create_stream.assert_called_once()
         call_kwargs = mock_stream_manager.get_or_create_stream.call_args.kwargs
@@ -185,12 +159,9 @@ class TestMetadataFeature:
     def test_create_stream_endpoint_without_metadata(self, client, mock_stream_manager):
         """Test POST /streams endpoint without metadata (backward compatibility)"""
         response = client.post(
-            "/streams",
-            json={
-                "url": "https://example.com/stream.m3u8"
-            }
+            "/streams", json={"url": "https://example.com/stream.m3u8"}
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert "stream_id" in data
@@ -205,12 +176,9 @@ class TestMetadataFeature:
             original_url="https://example.com/stream.m3u8",
             created_at=now,
             last_access=now,
-            metadata={
-                "local_id": "channel_123",
-                "name": "Test Channel"
-            }
+            metadata={"local_id": "channel_123", "name": "Test Channel"},
         )
-        
+
         assert stream_info.metadata is not None
         assert stream_info.metadata["local_id"] == "channel_123"
         assert stream_info.metadata["name"] == "Test Channel"
@@ -222,9 +190,9 @@ class TestMetadataFeature:
             stream_id="test_123",
             original_url="https://example.com/stream.m3u8",
             created_at=now,
-            last_access=now
+            last_access=now,
         )
-        
+
         assert stream_info.metadata is not None
         assert stream_info.metadata == {}
         assert len(stream_info.metadata) == 0
@@ -233,18 +201,15 @@ class TestMetadataFeature:
         """Test that GET /streams includes metadata in response"""
         # Mock a stream with metadata
         now = datetime.now(timezone.utc)
-        mock_stream = StreamInfo(
+        _mock_stream = StreamInfo(
             stream_id="test_123",
             original_url="https://example.com/stream.m3u8",
             created_at=now,
             last_access=now,
             current_url="https://example.com/stream.m3u8",
-            metadata={
-                "local_id": "channel_123",
-                "channel_name": "Test Channel"
-            }
+            metadata={"local_id": "channel_123", "channel_name": "Test Channel"},
         )
-        
+
         mock_stream_manager.get_stats.return_value = {
             "proxy_stats": {
                 "total_streams": 1,
@@ -253,37 +218,39 @@ class TestMetadataFeature:
                 "active_clients": 0,
                 "total_bytes_served": 0,
                 "total_segments_served": 0,
-                "uptime_seconds": 0
+                "uptime_seconds": 0,
             },
-            "streams": [{
-                "stream_id": "test_123",
-                "original_url": "https://example.com/stream.m3u8",
-                "current_url": "https://example.com/stream.m3u8",
-                "user_agent": "Test/1.0",
-                "client_count": 0,
-                "total_bytes_served": 0,
-                "total_segments_served": 0,
-                "error_count": 0,
-                "is_active": True,
-                "has_failover": False,
-                "stream_type": "HLS",
-                "created_at": now.isoformat(),
-                "last_access": now.isoformat(),
-                "metadata": {
-                    "local_id": "channel_123",
-                    "channel_name": "Test Channel"
+            "streams": [
+                {
+                    "stream_id": "test_123",
+                    "original_url": "https://example.com/stream.m3u8",
+                    "current_url": "https://example.com/stream.m3u8",
+                    "user_agent": "Test/1.0",
+                    "client_count": 0,
+                    "total_bytes_served": 0,
+                    "total_segments_served": 0,
+                    "error_count": 0,
+                    "is_active": True,
+                    "has_failover": False,
+                    "stream_type": "HLS",
+                    "created_at": now.isoformat(),
+                    "last_access": now.isoformat(),
+                    "metadata": {
+                        "local_id": "channel_123",
+                        "channel_name": "Test Channel",
+                    },
                 }
-            }],
-            "clients": []
+            ],
+            "clients": [],
         }
-        
+
         response = client.get("/streams")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert "streams" in data
         assert len(data["streams"]) == 1
-        
+
         stream = data["streams"][0]
         assert "metadata" in stream
         assert stream["metadata"]["local_id"] == "channel_123"
@@ -296,10 +263,10 @@ class TestMetadataFeature:
             metadata={
                 "local_id": "channel_hbo_hd",
                 "channel_name": "HBO HD",
-                "channel_number": "201"
-            }
+                "channel_number": "201",
+            },
         )
-        
+
         assert request.metadata["local_id"] == "channel_hbo_hd"
         assert request.metadata["channel_name"] == "HBO HD"
         assert request.metadata["channel_number"] == "201"
@@ -313,10 +280,10 @@ class TestMetadataFeature:
                 "subcategory": "soccer",
                 "league": "premier_league",
                 "quality": "1080p",
-                "language": "en"
-            }
+                "language": "en",
+            },
         )
-        
+
         assert request.metadata["category"] == "sports"
         assert request.metadata["quality"] == "1080p"
 
@@ -327,10 +294,10 @@ class TestMetadataFeature:
             metadata={
                 "provider": "provider_a",
                 "provider_stream_id": "ext_12345",
-                "region": "us-east"
-            }
+                "region": "us-east",
+            },
         )
-        
+
         assert request.metadata["provider"] == "provider_a"
         assert request.metadata["provider_stream_id"] == "ext_12345"
         assert request.metadata["region"] == "us-east"
@@ -338,7 +305,7 @@ class TestMetadataFeature:
 
 class TestMetadataIntegration:
     """Integration tests for metadata feature"""
-    
+
     @pytest.fixture
     def client(self):
         return TestClient(app)
@@ -355,32 +322,31 @@ class TestMetadataIntegration:
                     "local_id": "workflow_test",
                     "test_name": "Full Workflow Test",
                     "count": 42,
-                    "active": True
-                }
-            }
+                    "active": True,
+                },
+            },
         )
-        
+
         assert create_response.status_code == 200
         create_data = create_response.json()
         stream_id = create_data["stream_id"]
-        
+
         # Verify metadata in creation response
         assert "metadata" in create_data
         assert create_data["metadata"]["local_id"] == "workflow_test"
         assert create_data["metadata"]["count"] == "42"  # Converted to string
         assert create_data["metadata"]["active"] == "True"  # Converted to string
-        
+
         # Retrieve streams and verify metadata persisted
         list_response = client.get("/streams")
         assert list_response.status_code == 200
         list_data = list_response.json()
-        
+
         # Find our stream
         our_stream = next(
-            (s for s in list_data["streams"] if s["stream_id"] == stream_id),
-            None
+            (s for s in list_data["streams"] if s["stream_id"] == stream_id), None
         )
-        
+
         assert our_stream is not None
         assert "metadata" in our_stream
         assert our_stream["metadata"]["local_id"] == "workflow_test"

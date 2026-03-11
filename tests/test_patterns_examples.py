@@ -1,15 +1,17 @@
 """
 Additional test examples demonstrating Python testing best practices
 """
+
 from stream_manager import StreamManager
 import pytest
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, patch
 import asyncio
 from datetime import datetime
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 class TestMockingExamples:
@@ -20,10 +22,10 @@ class TestMockingExamples:
         """Example of mocking HTTP requests"""
         # Arrange
         manager = StreamManager()
-        test_url = "http://example.com/test.m3u8"
+        _test_url = "http://example.com/test.m3u8"
 
         # Mock the HTTP client response
-        with patch.object(manager.http_client, 'get') as mock_get:
+        with patch.object(manager.http_client, "get") as mock_get:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.text = "#EXTM3U\nsegment1.ts"
@@ -39,11 +41,14 @@ class TestMockingExamples:
 class TestParameterizedTests:
     """Examples of parameterized tests - testing multiple inputs efficiently"""
 
-    @pytest.mark.parametrize("url,expected_length", [
-        ("http://example.com/stream.m3u8", 32),
-        ("http://different.com/another.m3u8", 32),
-        ("https://secure.example.com/playlist.m3u8", 32),
-    ])
+    @pytest.mark.parametrize(
+        "url,expected_length",
+        [
+            ("http://example.com/stream.m3u8", 32),
+            ("http://different.com/another.m3u8", 32),
+            ("https://secure.example.com/playlist.m3u8", 32),
+        ],
+    )
     @pytest.mark.asyncio
     async def test_stream_id_generation_for_different_urls(self, url, expected_length):
         """Test that different URLs produce stream IDs of expected length"""
@@ -65,10 +70,13 @@ class TestParameterizedTests:
         manager = StreamManager()
         primary_url = "http://primary.com/stream.m3u8"
         failover_urls = [
-            f"http://backup{i}.com/stream.m3u8" for i in range(failover_count)]
+            f"http://backup{i}.com/stream.m3u8" for i in range(failover_count)
+        ]
 
         # Act
-        stream_id = await manager.get_or_create_stream(primary_url, failover_urls=failover_urls)
+        stream_id = await manager.get_or_create_stream(
+            primary_url, failover_urls=failover_urls
+        )
 
         # Assert
         assert stream_id is not None
@@ -122,7 +130,7 @@ class TestErrorHandling:
 
         # Assert
         assert stream_id_1 == stream_id_2  # Should be the same
-        assert len(manager.streams) == 1   # Only one stream created
+        assert len(manager.streams) == 1  # Only one stream created
 
     def test_empty_url_handling(self):
         """Test behavior with edge case inputs"""
@@ -190,9 +198,7 @@ class TestDataValidation:
 
         # Act
         stream_id = await manager.get_or_create_stream(
-            url,
-            failover_urls=failover_urls,
-            user_agent=user_agent
+            url, failover_urls=failover_urls, user_agent=user_agent
         )
 
         # Assert - check all properties are set correctly

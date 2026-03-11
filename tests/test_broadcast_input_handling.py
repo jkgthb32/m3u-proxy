@@ -1,11 +1,10 @@
-import pytest
 from src.broadcast_manager import BroadcastConfig, NetworkBroadcastProcess
 
 
 def test_input_included_for_emby_url():
     cfg = BroadcastConfig(
         network_id="embytest",
-        stream_url="http://192.168.11.22:8096/Videos/682/stream.ts?static=true&api_key=abc&StartTimeTicks=4290000000&AudioBitrate=192"
+        stream_url="http://192.168.11.22:8096/Videos/682/stream.ts?static=true&api_key=abc&StartTimeTicks=4290000000&AudioBitrate=192",
     )
 
     proc = NetworkBroadcastProcess(cfg, hls_base_dir="/tmp")
@@ -21,7 +20,7 @@ def test_input_and_headers_ordering_when_headers_provided():
     cfg = BroadcastConfig(
         network_id="hdrtest",
         stream_url="http://example.com/start.m3u8",
-        headers={"X-Test": "1"}
+        headers={"X-Test": "1"},
     )
     proc = NetworkBroadcastProcess(cfg, hls_base_dir="/tmp")
     cmd = proc._build_ffmpeg_command()

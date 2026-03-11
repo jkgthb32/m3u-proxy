@@ -1,7 +1,8 @@
 # Add src to path first
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 from unittest.mock import Mock, MagicMock
@@ -17,9 +18,9 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         request.headers = {"x-forwarded-for": "192.168.1.100"}
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         assert client_info["ip_address"] == "192.168.1.100"
 
     def test_x_forwarded_for_multiple_ips(self):
@@ -28,9 +29,9 @@ class TestClientIPDetection:
         # Format: "client, proxy1, proxy2"
         request.headers = {"x-forwarded-for": "192.168.1.100, 10.0.0.5, 10.0.0.6"}
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         # Should return the first IP (original client)
         assert client_info["ip_address"] == "192.168.1.100"
 
@@ -39,9 +40,9 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         request.headers = {"x-forwarded-for": "  192.168.1.100  ,  10.0.0.5  "}
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         # Should strip spaces correctly
         assert client_info["ip_address"] == "192.168.1.100"
 
@@ -50,9 +51,9 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         request.headers = {}
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         assert client_info["ip_address"] == "10.0.0.1"
 
     def test_no_client_and_no_header(self):
@@ -60,9 +61,9 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         request.headers = {}
         request.client = None
-        
+
         client_info = get_client_info(request)
-        
+
         assert client_info["ip_address"] == "unknown"
 
     def test_empty_x_forwarded_for(self):
@@ -70,9 +71,9 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         request.headers = {"x-forwarded-for": ""}
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         # Should fallback to client.host when X-Forwarded-For is empty
         assert client_info["ip_address"] == "10.0.0.1"
 
@@ -81,12 +82,12 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         request.headers = {
             "x-forwarded-for": "192.168.1.100",
-            "user-agent": "TestClient/1.0"
+            "user-agent": "TestClient/1.0",
         }
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         assert client_info["ip_address"] == "192.168.1.100"
         assert client_info["user_agent"] == "TestClient/1.0"
 
@@ -95,9 +96,9 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         request.headers = {"x-forwarded-for": "2001:0db8:85a3::8a2e:0370:7334"}
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         assert client_info["ip_address"] == "2001:0db8:85a3::8a2e:0370:7334"
 
     def test_case_insensitive_header(self):
@@ -105,12 +106,15 @@ class TestClientIPDetection:
         request = Mock(spec=Request)
         # FastAPI normalizes headers to lowercase, so we test with lowercase
         request.headers = MagicMock()
-        request.headers.get = MagicMock(side_effect=lambda key, default=None: 
-            "192.168.1.100" if key.lower() == "x-forwarded-for" else default)
+        request.headers.get = MagicMock(
+            side_effect=lambda key, default=None: (
+                "192.168.1.100" if key.lower() == "x-forwarded-for" else default
+            )
+        )
         request.client = Mock(host="10.0.0.1")
-        
+
         client_info = get_client_info(request)
-        
+
         assert client_info["ip_address"] == "192.168.1.100"
 
 

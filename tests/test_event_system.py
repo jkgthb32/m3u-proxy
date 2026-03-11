@@ -1,17 +1,18 @@
 """
 Test the event system integration
 """
+
 from models import StreamEvent, EventType, WebhookConfig
 from events import EventManager
 import asyncio
 import pytest
-import httpx
 from unittest.mock import Mock, AsyncMock
 from datetime import datetime
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 class TestEventSystem:
@@ -36,7 +37,7 @@ class TestEventSystem:
         test_event = StreamEvent(
             event_type=EventType.STREAM_STARTED,
             stream_id="test_123",
-            data={"url": "http://test.com/stream.m3u8"}
+            data={"url": "http://test.com/stream.m3u8"},
         )
 
         await event_manager.emit_event(test_event)
@@ -62,7 +63,7 @@ class TestEventSystem:
             url=webhook_url,
             events=[EventType.STREAM_STARTED, EventType.CLIENT_CONNECTED],
             timeout=5,
-            retry_attempts=2
+            retry_attempts=2,
         )
 
         # Act
@@ -84,8 +85,7 @@ class TestEventSystem:
         # Arrange
         event_manager = EventManager()
         webhook_config = WebhookConfig(
-            url="http://example.com/webhook",
-            events=[EventType.STREAM_STARTED]
+            url="http://example.com/webhook", events=[EventType.STREAM_STARTED]
         )
         event_manager.add_webhook(webhook_config)
 
@@ -93,10 +93,13 @@ class TestEventSystem:
         with AsyncMock() as mock_client:
             mock_response = Mock()
             mock_response.status_code = 200
-            mock_client.return_value.__aenter__.return_value.post.return_value = mock_response
+            mock_client.return_value.__aenter__.return_value.post.return_value = (
+                mock_response
+            )
 
             # Patch httpx.AsyncClient
             import httpx
+
             original_client = httpx.AsyncClient
             httpx.AsyncClient = mock_client
 
@@ -107,7 +110,7 @@ class TestEventSystem:
                 test_event = StreamEvent(
                     event_type=EventType.STREAM_STARTED,
                     stream_id="test_123",
-                    data={"url": "http://test.com/stream.m3u8"}
+                    data={"url": "http://test.com/stream.m3u8"},
                 )
 
                 # Emit event
@@ -130,10 +133,7 @@ class TestEventSystem:
         event = StreamEvent(
             event_type=EventType.CLIENT_CONNECTED,
             stream_id="stream_456",
-            data={
-                "client_id": "client_789",
-                "ip_address": "192.168.1.100"
-            }
+            data={"client_id": "client_789", "ip_address": "192.168.1.100"},
         )
 
         # Assert
@@ -150,7 +150,7 @@ class TestEventSystem:
             url="https://secure.example.com/webhook",
             events=[EventType.STREAM_STARTED, EventType.STREAM_STOPPED],
             timeout=10,
-            retry_attempts=3
+            retry_attempts=3,
         )
 
         assert valid_config.timeout == 10

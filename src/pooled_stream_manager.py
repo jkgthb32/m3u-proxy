@@ -8,19 +8,17 @@ import json
 import time
 import uuid
 import hashlib
-from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple, Any
-from urllib.parse import urlparse
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 from config import settings
 import os
 import tempfile
-import shutil
 
 logger = logging.getLogger(__name__)
 
 try:
-    import redis.asyncio as redis
+    import redis.asyncio as redis  # noqa: F401
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -30,7 +28,16 @@ except ImportError:
 class SharedTranscodingProcess:
     """Represents a shared FFmpeg transcoding process with broadcasting to multiple clients"""
 
-    def __init__(self, stream_id: str, url: str, profile: str, ffmpeg_args: List[str], user_agent: Optional[str] = None, headers: Optional[Dict[str, str]] = None, hls_base_dir: Optional[str] = None):
+    def __init__(
+        self,
+        stream_id: str,
+        url: str,
+        profile: str,
+        ffmpeg_args: List[str],
+        user_agent: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+        hls_base_dir: Optional[str] = None,
+    ):
         self.stream_id = stream_id
         self.url = url
         self.profile = profile
@@ -58,9 +65,13 @@ class SharedTranscodingProcess:
         self.mode = "stdout"
         self.hls_dir: Optional[str] = None
         # If ffmpeg_args suggest HLS output, switch to hls mode
-        joined_args = ' '.join(self.ffmpeg_args).lower()
-        if '-hls_time' in joined_args or '-hls_list_size' in joined_args or '-f hls' in joined_args:
-            self.mode = 'hls'
+        joined_args = " ".join(self.ffmpeg_args).lower()
+        if (
+            "-hls_time" in joined_args
+            or "-hls_list_size" in joined_args
+            or "-f hls" in joined_args
+        ):
+            self.mode = "hls"
             # Determine base dir for HLS output
             base_dir = None
             if self.hls_base_dir:
@@ -81,52 +92,64 @@ class SharedTranscodingProcess:
             # Create a per-stream directory for HLS segments
             try:
                 self.hls_dir = tempfile.mkdtemp(
-                    prefix=f"m3u_proxy_hls_{self.stream_id}_", dir=base_dir)
+                    prefix=f"m3u_proxy_hls_{self.stream_id}_", dir=base_dir
+                )
                 # Fix #6: Set explicit permissions to ensure NGINX can read segments
                 # rwxr-xr-x (755) allows owner full access, group/others can read/execute
                 try:
                     os.chmod(self.hls_dir, 0o755)
                 except Exception as e:
                     logger.warning(
-                        f"Failed to set permissions on HLS dir {self.hls_dir}: {e}")
+                        f"Failed to set permissions on HLS dir {self.hls_dir}: {e}"
+                    )
             except Exception as e:
                 # Fallback to system tempdir without dir param
                 logger.warning(
-                    f"Failed to create HLS dir in {base_dir}: {e}, falling back to system tempdir")
+                    f"Failed to create HLS dir in {base_dir}: {e}, falling back to system tempdir"
+                )
                 self.hls_dir = tempfile.mkdtemp(
-                    prefix=f"m3u_proxy_hls_{self.stream_id}_")
+                    prefix=f"m3u_proxy_hls_{self.stream_id}_"
+                )
                 try:
                     os.chmod(self.hls_dir, 0o755)
                 except Exception:
                     pass
 
             logger.info(
-                f"SharedTranscodingProcess {self.stream_id} will run in HLS mode, hls_dir={self.hls_dir}")
+                f"SharedTranscodingProcess {self.stream_id} will run in HLS mode, hls_dir={self.hls_dir}"
+            )
 
     async def start_process(self):
         """Start the FFmpeg process"""
         try:
-            logger.info(
-                f"Starting shared FFmpeg process for stream {self.stream_id}")
+            logger.info(f"Starting shared FFmpeg process for stream {self.stream_id}")
 
             # Build FFmpeg command - ensure output to stdout
             ffmpeg_cmd = ["ffmpeg"]
 
             # Add user agent / headers only for network inputs (http/rtsp/etc.)
-            if self.user_agent and isinstance(self.url, str) and ('://' in self.url and not self.url.startswith('file://')):
+            if (
+                self.user_agent
+                and isinstance(self.url, str)
+                and ("://" in self.url and not self.url.startswith("file://"))
+            ):
                 ffmpeg_cmd.extend(["-user_agent", self.user_agent])
 
             # Add headers if provided, ensuring proper format and only for network inputs
-            if self.headers and isinstance(self.url, str) and ('://' in self.url and not self.url.startswith('file://')):
-                header_str = "".join(
-                    [f"{k}: {v}\r\n" for k, v in self.headers.items()])
+            if (
+                self.headers
+                and isinstance(self.url, str)
+                and ("://" in self.url and not self.url.startswith("file://"))
+            ):
+                header_str = "".join([f"{k}: {v}\r\n" for k, v in self.headers.items()])
                 ffmpeg_cmd.extend(["-headers", header_str])
 
             # Process ffmpeg_args and insert HLS-specific options right before -i flag
             # For HLS inputs with extensionless segment URLs, we need special handling
             processed_args = []
-            is_hls_input = isinstance(
-                self.url, str) and self.url.lower().endswith('.m3u8')
+            is_hls_input = isinstance(self.url, str) and self.url.lower().endswith(
+                ".m3u8"
+            )
             i = 0
             while i < len(self.ffmpeg_args):
                 arg = self.ffmpeg_args[i]
@@ -135,10 +158,19 @@ class SharedTranscodingProcess:
                     if is_hls_input:
                         # Add protocol whitelist to allow http/https URLs in playlists
                         processed_args.extend(
-                            ["-protocol_whitelist", "file,http,https,tcp,tls,crypto"])
+                            ["-protocol_whitelist", "file,http,https,tcp,tls,crypto"]
+                        )
                         # Enable following HTTP redirects for HLS streams
                         processed_args.extend(
-                            ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2"])
+                            [
+                                "-reconnect",
+                                "1",
+                                "-reconnect_streamed",
+                                "1",
+                                "-reconnect_delay_max",
+                                "2",
+                            ]
+                        )
                         # Allow any extensions (including extensionless) for segments
                         processed_args.extend(["-allowed_extensions", "ALL"])
                     # Add -i flag and use self.url as the input
@@ -150,23 +182,24 @@ class SharedTranscodingProcess:
                     # Check if this is a transcoding profile (has -c:v or -c:a that's not 'copy')
                     is_transcoding = False
                     for j, cmd_arg in enumerate(self.ffmpeg_args):
-                        if cmd_arg in ['-c:v', '-c:a'] and j + 1 < len(self.ffmpeg_args):
-                            if self.ffmpeg_args[j + 1] not in ['copy', 'Copy']:
+                        if cmd_arg in ["-c:v", "-c:a"] and j + 1 < len(
+                            self.ffmpeg_args
+                        ):
+                            if self.ffmpeg_args[j + 1] not in ["copy", "Copy"]:
                                 is_transcoding = True
                                 break
 
                     # Only add stream mapping for transcoding profiles
                     if is_transcoding:
                         # Check if user already specified -map
-                        has_map = any(
-                            str(a) == '-map' for a in self.ffmpeg_args)
+                        has_map = any(str(a) == "-map" for a in self.ffmpeg_args)
                         if not has_map:
                             # Map all video and audio streams
                             # The '?' makes streams optional - won't fail if stream type doesn't exist (e.g. audio only)
-                            processed_args.extend(
-                                ['-map', '0:v:0?', '-map', '0:a:0?'])
+                            processed_args.extend(["-map", "0:v:0?", "-map", "0:a:0?"])
                             logger.debug(
-                                f"Added stream mapping for transcoding profile: -map 0:v:0? -map 0:a:0?")
+                                "Added stream mapping for transcoding profile: -map 0:v:0? -map 0:a:0?"
+                            )
 
                     i += 2  # Skip the old URL in ffmpeg_args
                 else:
@@ -176,11 +209,13 @@ class SharedTranscodingProcess:
             ffmpeg_cmd.extend(processed_args)
 
             # If HLS mode, ensure we write to the hls_dir index.m3u8
-            if self.mode == 'hls':
+            if self.mode == "hls":
                 # If the ffmpeg args already include an output filename, respect it
                 # Otherwise append the playlist target into the hls dir
                 playlist_path = os.path.join(
-                    self.hls_dir if self.hls_dir else tempfile.gettempdir(), 'index.m3u8')
+                    self.hls_dir if self.hls_dir else tempfile.gettempdir(),
+                    "index.m3u8",
+                )
                 # If ffmpeg_args already specify an output playlist, replace any m3u8 token with absolute path
                 replaced = False
                 for i, token in enumerate(ffmpeg_cmd):
@@ -189,12 +224,14 @@ class SharedTranscodingProcess:
                             continue
                         t_lower = token.lower()
                         # Skip tokens that look like input specs ("-i <url>" or "-i<url>")
-                        if t_lower.endswith('.m3u8'):
-                            prev = ffmpeg_cmd[i-1] if i > 0 else None
-                            if isinstance(prev, str) and prev == '-i':
+                        if t_lower.endswith(".m3u8"):
+                            prev = ffmpeg_cmd[i - 1] if i > 0 else None
+                            if isinstance(prev, str) and prev == "-i":
                                 # This is an input URL; do NOT replace it with our output path
                                 continue
-                            if t_lower.startswith('-i') and t_lower[2:].endswith('.m3u8'):
+                            if t_lower.startswith("-i") and t_lower[2:].endswith(
+                                ".m3u8"
+                            ):
                                 # Token like '-ihttp://.../playlist.m3u8' - treat as input, skip
                                 continue
                             # Otherwise this looks like an output playlist token, replace it
@@ -205,8 +242,11 @@ class SharedTranscodingProcess:
 
                 if not replaced:
                     # Remove any pipe outputs which are inappropriate for file-based HLS output
-                    ffmpeg_cmd = [t for t in ffmpeg_cmd if not (
-                        isinstance(t, str) and t.startswith('pipe:'))]
+                    ffmpeg_cmd = [
+                        t
+                        for t in ffmpeg_cmd
+                        if not (isinstance(t, str) and t.startswith("pipe:"))
+                    ]
                     # Append absolute playlist path as the intended HLS output
                     ffmpeg_cmd.append(playlist_path)
 
@@ -215,7 +255,11 @@ class SharedTranscodingProcess:
                 if "-f" not in [a.lower() for a in ffmpeg_cmd]:
                     ffmpeg_cmd.extend(["-f", "mpegts"])
                 # Use pipe:1 for stdout-based broadcasting unless an output file is specified
-                if "pipe:1" not in ffmpeg_cmd and "-" not in ffmpeg_cmd and self.mode == 'stdout':
+                if (
+                    "pipe:1" not in ffmpeg_cmd
+                    and "-" not in ffmpeg_cmd
+                    and self.mode == "stdout"
+                ):
                     ffmpeg_cmd.append("pipe:1")
 
             logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
@@ -223,24 +267,21 @@ class SharedTranscodingProcess:
             self.process = await asyncio.create_subprocess_exec(
                 *ffmpeg_cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
             )
 
             self.status = "running"
-            logger.info(
-                f"Shared FFmpeg process started with PID: {self.process.pid}")
+            logger.info(f"Shared FFmpeg process started with PID: {self.process.pid}")
 
             # Start stderr logging task
             asyncio.create_task(self._log_stderr())
 
             # Start broadcaster task to read from FFmpeg and send to all clients
-            if self.mode == 'stdout':
-                self._broadcaster_task = asyncio.create_task(
-                    self._broadcast_loop())
+            if self.mode == "stdout":
+                self._broadcaster_task = asyncio.create_task(self._broadcast_loop())
             else:
                 # In HLS mode, start a small watcher task to update last_chunk_time
-                self._broadcaster_task = asyncio.create_task(
-                    self._hls_watch_loop())
+                self._broadcaster_task = asyncio.create_task(self._hls_watch_loop())
 
             return True
 
@@ -253,7 +294,8 @@ class SharedTranscodingProcess:
         """Read from FFmpeg stdout and broadcast to all client queues"""
         if not self.process or not self.process.stdout:
             logger.error(
-                f"Cannot start broadcaster - no process or stdout for {self.stream_id}")
+                f"Cannot start broadcaster - no process or stdout for {self.stream_id}"
+            )
             return
 
         logger.info(f"Starting broadcaster for stream {self.stream_id}")
@@ -263,8 +305,7 @@ class SharedTranscodingProcess:
                 # Read chunk from FFmpeg
                 chunk = await self.process.stdout.read(32768)
                 if not chunk:
-                    logger.info(
-                        f"FFmpeg stdout closed for stream {self.stream_id}")
+                    logger.info(f"FFmpeg stdout closed for stream {self.stream_id}")
                     break
 
                 # Update last chunk time
@@ -289,10 +330,10 @@ class SharedTranscodingProcess:
                                 queue.put_nowait(chunk)
                             except asyncio.QueueFull:
                                 logger.warning(
-                                    f"Client {client_id} queue full after dropping chunk")
+                                    f"Client {client_id} queue full after dropping chunk"
+                                )
                         except Exception as e:
-                            logger.error(
-                                f"Error sending to client {client_id}: {e}")
+                            logger.error(f"Error sending to client {client_id}: {e}")
                             dead_clients.append(client_id)
 
                     # Remove dead clients
@@ -312,7 +353,7 @@ class SharedTranscodingProcess:
                 for queue in self.client_queues.values():
                     try:
                         queue.put_nowait(None)  # None signals end of stream
-                    except:
+                    except Exception:
                         pass
 
     async def _hls_watch_loop(self):
@@ -345,27 +386,27 @@ class SharedTranscodingProcess:
         try:
             # Monitor FFmpeg stderr for various error conditions
             write_error_patterns = [
-                'no space left on device',
-                'permission denied',
-                'i/o error',
-                'disk full',
-                'cannot write',
-                'failed to open',
-                'error writing',
+                "no space left on device",
+                "permission denied",
+                "i/o error",
+                "disk full",
+                "cannot write",
+                "failed to open",
+                "error writing",
             ]
 
             # Input/connection error patterns that should trigger failover
             input_error_patterns = [
-                'error opening input',
-                'failed to resolve hostname',
-                'connection refused',
-                'connection timed out',
-                'input/output error',
-                'server returned 4',  # Matches 403, 404, etc.
-                'server returned 5',  # Matches 500, 502, 503, etc.
-                'invalid data found',
-                'protocol not found',
-                'end of file',
+                "error opening input",
+                "failed to resolve hostname",
+                "connection refused",
+                "connection timed out",
+                "input/output error",
+                "server returned 4",  # Matches 403, 404, etc.
+                "server returned 5",  # Matches 500, 502, 503, etc.
+                "invalid data found",
+                "protocol not found",
+                "end of file",
             ]
 
             # Read stderr in small chunks and buffer lines ourselves to avoid
@@ -390,7 +431,7 @@ class SharedTranscodingProcess:
                 # Split on newline and process full lines
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    line_str = line.decode('utf-8', errors='ignore').strip()
+                    line_str = line.decode("utf-8", errors="ignore").strip()
                     if not line_str:
                         continue
 
@@ -427,17 +468,16 @@ class SharedTranscodingProcess:
                     buf = b""
 
         except Exception as e:
-            logger.error(
-                f"Error reading FFmpeg stderr for {self.stream_id}: {e}")
+            logger.error(f"Error reading FFmpeg stderr for {self.stream_id}: {e}")
 
     async def read_playlist(self) -> Optional[str]:
         """Read the generated HLS playlist (index.m3u8) if available"""
         if not self.hls_dir:
             return None
-        playlist_path = os.path.join(self.hls_dir, 'index.m3u8')
+        playlist_path = os.path.join(self.hls_dir, "index.m3u8")
         try:
             if os.path.exists(playlist_path):
-                with open(playlist_path, 'r', encoding='utf-8', errors='ignore') as fh:
+                with open(playlist_path, "r", encoding="utf-8", errors="ignore") as fh:
                     return fh.read()
         except Exception as e:
             logger.error(f"Error reading playlist {playlist_path}: {e}")
@@ -460,7 +500,8 @@ class SharedTranscodingProcess:
             self.clients[client_id] = time.time()
             self.last_access = time.time()
             logger.info(
-                f"Client {client_id} joined shared stream {self.stream_id} ({len(self.clients)} total)")
+                f"Client {client_id} joined shared stream {self.stream_id} ({len(self.clients)} total)"
+            )
             return client_queue
 
     async def remove_client(self, client_id: str):
@@ -470,7 +511,8 @@ class SharedTranscodingProcess:
                 del self.clients[client_id]
                 self.last_access = time.time()
                 logger.info(
-                    f"Client {client_id} left shared stream {self.stream_id} ({len(self.clients)} remaining)")
+                    f"Client {client_id} left shared stream {self.stream_id} ({len(self.clients)} remaining)"
+                )
 
             # Remove client's queue
             if client_id in self.client_queues:
@@ -479,7 +521,8 @@ class SharedTranscodingProcess:
     async def prune_stale_clients(self, timeout: int):
         """Remove clients that have been inactive for a while"""
         stale_clients = [
-            cid for cid, last_seen in self.clients.items()
+            cid
+            for cid, last_seen in self.clients.items()
             if time.time() - last_seen > timeout
         ]
         for client_id in stale_clients:
@@ -494,21 +537,24 @@ class SharedTranscodingProcess:
         if self.process and self.process.returncode is not None:
             if self.status != "failed":
                 logger.warning(
-                    f"FFmpeg process for stream {self.stream_id} has exited with code {self.process.returncode}.")
+                    f"FFmpeg process for stream {self.stream_id} has exited with code {self.process.returncode}."
+                )
                 self.status = "failed"
                 return False
 
         # Also check if process exists but is not responding
         if self.process is None and self.status == "running":
             logger.warning(
-                f"FFmpeg process for stream {self.stream_id} is None but status is running")
+                f"FFmpeg process for stream {self.stream_id} is None but status is running"
+            )
             self.status = "failed"
             return False
 
         # Check if no output for too long (indicates stuck process)
         if time.time() - self.last_chunk_time > self.output_timeout:
             logger.warning(
-                f"FFmpeg process for stream {self.stream_id} has produced no output for {self.output_timeout}s, marking as failed")
+                f"FFmpeg process for stream {self.stream_id} has produced no output for {self.output_timeout}s, marking as failed"
+            )
             self.status = "failed"
             return False
 
@@ -520,13 +566,15 @@ class SharedTranscodingProcess:
         try:
             if self.process and self.process.returncode is None:
                 logger.info(
-                    f"Terminating shared FFmpeg process for stream {self.stream_id}")
+                    f"Terminating shared FFmpeg process for stream {self.stream_id}"
+                )
                 try:
                     self.process.terminate()
                     await asyncio.wait_for(self.process.wait(), timeout=5.0)
                 except asyncio.TimeoutError:
                     logger.warning(
-                        f"FFmpeg process didn't terminate cleanly, killing it")
+                        "FFmpeg process didn't terminate cleanly, killing it"
+                    )
                     self.process.kill()
                     await self.process.wait()
                 except Exception as e:
@@ -564,27 +612,31 @@ class SharedTranscodingProcess:
             try:
                 os.rmdir(self.hls_dir)
                 logger.info(
-                    f"Cleaned up HLS directory for {self.stream_id}: removed {removed_count}/{file_count} files")
+                    f"Cleaned up HLS directory for {self.stream_id}: removed {removed_count}/{file_count} files"
+                )
             except OSError as e:
                 # Directory not empty or other error
                 logger.warning(
-                    f"Failed to remove HLS directory {self.hls_dir}: {e} ({failed_count} files failed to delete)")
+                    f"Failed to remove HLS directory {self.hls_dir}: {e} ({failed_count} files failed to delete)"
+                )
             except Exception as e:
                 logger.error(
-                    f"Unexpected error removing HLS directory {self.hls_dir}: {e}")
+                    f"Unexpected error removing HLS directory {self.hls_dir}: {e}"
+                )
 
         except Exception as e:
-            logger.error(
-                f"Error cleaning up HLS directory for {self.stream_id}: {e}")
+            logger.error(f"Error cleaning up HLS directory for {self.stream_id}: {e}")
 
 
 class PooledStreamManager:
     """Stream manager with Redis support and connection pooling"""
 
-    def __init__(self,
-                 redis_url: Optional[str] = None,
-                 worker_id: Optional[str] = None,
-                 enable_sharing: bool = True):
+    def __init__(
+        self,
+        redis_url: Optional[str] = None,
+        worker_id: Optional[str] = None,
+        enable_sharing: bool = True,
+    ):
 
         self.redis_url = redis_url or "redis://localhost:6379/0"
         self.worker_id = worker_id or str(uuid.uuid4())[:8]
@@ -607,27 +659,28 @@ class PooledStreamManager:
 
         # Configuration
         # seconds - how often to run cleanup loop
-        self.cleanup_interval = int(getattr(settings, 'CLEANUP_INTERVAL', 60))
+        self.cleanup_interval = int(getattr(settings, "CLEANUP_INTERVAL", 60))
         # seconds - Redis worker heartbeat
-        self.heartbeat_interval = int(
-            getattr(settings, 'HEARTBEAT_INTERVAL', 30))
+        self.heartbeat_interval = int(getattr(settings, "HEARTBEAT_INTERVAL", 30))
         # seconds - fallback timeout for streams with no clients
-        self.stream_timeout = int(getattr(settings, 'STREAM_TIMEOUT', 300))
+        self.stream_timeout = int(getattr(settings, "STREAM_TIMEOUT", 300))
         # Default 30 seconds - timeout for inactive clients
-        self.client_timeout = int(getattr(settings, 'CLIENT_TIMEOUT', 30))
+        self.client_timeout = int(getattr(settings, "CLIENT_TIMEOUT", 30))
         # HLS GC configuration (defaults from config.settings)
-        self.hls_gc_enabled = bool(getattr(settings, 'HLS_GC_ENABLED', True))
+        self.hls_gc_enabled = bool(getattr(settings, "HLS_GC_ENABLED", True))
         # How often to scan filesystem for stale HLS dirs (seconds)
-        self.hls_gc_interval = int(getattr(settings, 'HLS_GC_INTERVAL', 600))
+        self.hls_gc_interval = int(getattr(settings, "HLS_GC_INTERVAL", 600))
         # Age threshold for removing HLS dirs (seconds)
         self.hls_gc_age_threshold = int(
-            getattr(settings, 'HLS_GC_AGE_THRESHOLD', 60 * 60))
+            getattr(settings, "HLS_GC_AGE_THRESHOLD", 60 * 60)
+        )
         # Track last time GC ran so we can respect hls_gc_interval cadence
         self._last_hls_gc_run = 0
         # Base directory for HLS per-stream output. If settings.HLS_TEMP_DIR is not set,
         # fall back to the system tempdir used by tempfile.gettempdir()
-        self.hls_base_dir = getattr(
-            settings, 'HLS_TEMP_DIR', None) or tempfile.gettempdir()
+        self.hls_base_dir = (
+            getattr(settings, "HLS_TEMP_DIR", None) or tempfile.gettempdir()
+        )
 
         # Tasks
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -647,10 +700,11 @@ class PooledStreamManager:
         if self.event_manager:
             try:
                 from models import StreamEvent, EventType
+
                 event = StreamEvent(
                     event_type=getattr(EventType, event_type),
                     stream_id=stream_id,
-                    data=data
+                    data=data,
                 )
                 await self.event_manager.emit_event(event)
             except Exception as e:
@@ -664,18 +718,20 @@ class PooledStreamManager:
             try:
                 # Import here to avoid issues if redis not installed
                 import redis.asyncio as redis_async
+
                 self.redis_client = redis_async.from_url(
-                    self.redis_url, decode_responses=True)
+                    self.redis_url, decode_responses=True
+                )
                 await self.redis_client.ping()
                 logger.info(f"Redis connected for worker {self.worker_id}")
 
                 # Start heartbeat task
-                self._heartbeat_task = asyncio.create_task(
-                    self._heartbeat_loop())
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
             except Exception as e:
                 logger.warning(
-                    f"Failed to connect to Redis: {e}. Running in single-worker mode")
+                    f"Failed to connect to Redis: {e}. Running in single-worker mode"
+                )
                 self.enable_sharing = False
                 self.redis_client = None
 
@@ -715,15 +771,19 @@ class PooledStreamManager:
                 if self.redis_client:
                     now = time.time()
                     # Update heartbeat score
-                    await self.redis_client.zadd("worker_heartbeats", {self.worker_id: now})
+                    await self.redis_client.zadd(
+                        "worker_heartbeats", {self.worker_id: now}
+                    )
 
                     # Update worker data
                     worker_data = {
                         "last_seen": now,
                         "streams": list(self.shared_processes.keys()),
-                        "worker_id": self.worker_id
+                        "worker_id": self.worker_id,
                     }
-                    await self.redis_client.hset("workers", self.worker_id, json.dumps(worker_data))
+                    await self.redis_client.hset(
+                        "workers", self.worker_id, json.dumps(worker_data)
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -739,7 +799,10 @@ class PooledStreamManager:
                 # Optionally run HLS temp-dir GC (scans system temp dir for leftover m3u_proxy_hls_*)
                 if self.hls_gc_enabled:
                     now = time.time()
-                    if now - getattr(self, '_last_hls_gc_run', 0) >= self.hls_gc_interval:
+                    if (
+                        now - getattr(self, "_last_hls_gc_run", 0)
+                        >= self.hls_gc_interval
+                    ):
                         await self._gc_hls_temp_dirs()
                         self._last_hls_gc_run = now
 
@@ -758,7 +821,10 @@ class PooledStreamManager:
         for stream_id, process in self.shared_processes.items():
             process.health_check()
             await process.prune_stale_clients(self.client_timeout)
-            if process.should_cleanup(self.stream_timeout) or process.status == "failed":
+            if (
+                process.should_cleanup(self.stream_timeout)
+                or process.status == "failed"
+            ):
                 to_cleanup.append(stream_id)
 
         for stream_id in to_cleanup:
@@ -782,10 +848,11 @@ class PooledStreamManager:
             # Normally, the parent StreamManager handles event emission
             if emit_event:
                 stream_id = self.stream_key_to_id.get(stream_key, stream_key)
-                await self._emit_event("STREAM_STOPPED", stream_id, {
-                    "reason": "transcoding_cleanup",
-                    "stream_key": stream_key
-                })
+                await self._emit_event(
+                    "STREAM_STOPPED",
+                    stream_id,
+                    {"reason": "transcoding_cleanup", "stream_key": stream_key},
+                )
 
             # Clean up the mapping
             if stream_key in self.stream_key_to_id:
@@ -795,7 +862,9 @@ class PooledStreamManager:
             if self.redis_client:
                 redis_key = f"stream:{stream_key}"
                 await self.redis_client.delete(redis_key)
-                await self.redis_client.srem(f"worker:{self.worker_id}:streams", redis_key)
+                await self.redis_client.srem(
+                    f"worker:{self.worker_id}:streams", redis_key
+                )
 
     async def _cleanup_stale_redis_streams(self):
         """Clean up stale streams from Redis (dead workers)"""
@@ -805,7 +874,9 @@ class PooledStreamManager:
         try:
             # Find stale workers
             stale_threshold = time.time() - (self.heartbeat_interval * 3)
-            stale_workers = await self.redis_client.zrangebyscore("worker_heartbeats", -1, stale_threshold)
+            stale_workers = await self.redis_client.zrangebyscore(
+                "worker_heartbeats", -1, stale_threshold
+            )
 
             if not stale_workers:
                 return
@@ -817,11 +888,14 @@ class PooledStreamManager:
                 if stream_keys:
                     await self.redis_client.delete(*stream_keys)
                     logger.info(
-                        f"Cleaned up {len(stream_keys)} streams for stale worker {worker_id}")
+                        f"Cleaned up {len(stream_keys)} streams for stale worker {worker_id}"
+                    )
                 await self.redis_client.delete(worker_streams_key)
 
             # Remove stale workers from heartbeats and data
-            await self.redis_client.zremrangebyscore("worker_heartbeats", -1, stale_threshold)
+            await self.redis_client.zremrangebyscore(
+                "worker_heartbeats", -1, stale_threshold
+            )
             await self.redis_client.hdel("workers", *stale_workers)
             logger.info(f"Removed stale workers: {stale_workers}")
 
@@ -853,8 +927,7 @@ class PooledStreamManager:
         """
         try:
             # Use configured HLS base dir (may be system tempdir by default)
-            tmpdir = getattr(self, 'hls_base_dir',
-                             None) or tempfile.gettempdir()
+            tmpdir = getattr(self, "hls_base_dir", None) or tempfile.gettempdir()
             prefix = "m3u_proxy_hls_"
             now = time.time()
 
@@ -868,8 +941,7 @@ class PooledStreamManager:
             try:
                 entries = os.listdir(tmpdir)
             except Exception as e:
-                logger.warning(
-                    f"Failed to list HLS temp directory {tmpdir}: {e}")
+                logger.warning(f"Failed to list HLS temp directory {tmpdir}: {e}")
                 entries = []
 
             removed = 0
@@ -901,8 +973,7 @@ class PooledStreamManager:
                         skipped_not_empty += 1
                         continue
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to check contents of {full_path}: {e}")
+                    logger.warning(f"Failed to check contents of {full_path}: {e}")
                     continue
 
                 # Fix #3: Check age to avoid deleting recently-created directories
@@ -921,14 +992,15 @@ class PooledStreamManager:
                         os.rmdir(full_path)
                         removed += 1
                         logger.info(
-                            f"Removed empty stale HLS dir: {full_path} (age: {int(age)}s)")
+                            f"Removed empty stale HLS dir: {full_path} (age: {int(age)}s)"
+                        )
                     except OSError as e:
                         # Directory not empty or permission error
-                        logger.warning(
-                            f"Failed to remove HLS dir {full_path}: {e}")
+                        logger.warning(f"Failed to remove HLS dir {full_path}: {e}")
                     except Exception as e:
                         logger.error(
-                            f"Unexpected error removing HLS dir {full_path}: {e}")
+                            f"Unexpected error removing HLS dir {full_path}: {e}"
+                        )
                 else:
                     skipped_too_young += 1
 
@@ -967,8 +1039,7 @@ class PooledStreamManager:
                               same stream key even though the URL has changed.
         """
 
-        stream_key = reuse_stream_key or self._generate_stream_key(
-            url, profile)
+        stream_key = reuse_stream_key or self._generate_stream_key(url, profile)
 
         # Track the stream_id -> stream_key mapping for event emission
         if stream_id:
@@ -984,15 +1055,18 @@ class PooledStreamManager:
             # Check if URL has changed (failover scenario) or if process has failed
             url_changed = process.url != url
             process_failed = process.status == "failed" or (
-                process.process and process.process.returncode is not None)
+                process.process and process.process.returncode is not None
+            )
 
             if url_changed or process_failed:
                 if url_changed:
                     logger.info(
-                        f"Stream {stream_key} URL changed (failover), restarting with new URL: {url}")
+                        f"Stream {stream_key} URL changed (failover), restarting with new URL: {url}"
+                    )
                 else:
                     logger.warning(
-                        f"Existing process for stream {stream_key} is unhealthy, recreating...")
+                        f"Existing process for stream {stream_key} is unhealthy, recreating..."
+                    )
                 await self._cleanup_local_process(stream_key)
                 # Process will be recreated below with new URL
             else:
@@ -1010,13 +1084,20 @@ class PooledStreamManager:
                 owner = stream_data.get("owner")
                 if owner != self.worker_id:
                     logger.info(
-                        f"Stream {stream_key} is managed by another worker ({owner}). This worker will not create a local copy.")
-                    raise ConnectionAbortedError(
-                        f"Stream is on another worker {owner}")
+                        f"Stream {stream_key} is managed by another worker ({owner}). This worker will not create a local copy."
+                    )
+                    raise ConnectionAbortedError(f"Stream is on another worker {owner}")
 
         # Create new local process
         process = SharedTranscodingProcess(
-            stream_key, url, profile, ffmpeg_args, user_agent=user_agent, headers=headers, hls_base_dir=self.hls_base_dir)
+            stream_key,
+            url,
+            profile,
+            ffmpeg_args,
+            user_agent=user_agent,
+            headers=headers,
+            hls_base_dir=self.hls_base_dir,
+        )
 
         if await process.start_process():
             self.shared_processes[stream_key] = process
@@ -1033,17 +1114,21 @@ class PooledStreamManager:
                     "created_at": time.time(),
                     "last_access": time.time(),
                     "status": "running",
-                    "ffmpeg_pid": process.process.pid if process.process else 0
+                    "ffmpeg_pid": process.process.pid if process.process else 0,
                 }
                 await self.redis_client.hset(redis_key, mapping=stream_data)
-                await self.redis_client.sadd(f"worker:{self.worker_id}:streams", redis_key)
+                await self.redis_client.sadd(
+                    f"worker:{self.worker_id}:streams", redis_key
+                )
 
             logger.info(
-                f"Created new shared stream {stream_key} for {len(process.clients)} clients")
+                f"Created new shared stream {stream_key} for {len(process.clients)} clients"
+            )
             return stream_key, process
         else:
             raise Exception(
-                f"Failed to start transcoding process for stream {stream_key}")
+                f"Failed to start transcoding process for stream {stream_key}"
+            )
 
     async def _is_redis_stream_healthy(self, stream_data: Dict) -> bool:
         """Check if a Redis stream entry represents a healthy stream"""
@@ -1078,14 +1163,16 @@ class PooledStreamManager:
             # If no more clients, immediately schedule cleanup
             if not process.clients:
                 logger.info(
-                    f"No more clients for stream {stream_key}, scheduling immediate cleanup")
+                    f"No more clients for stream {stream_key}, scheduling immediate cleanup"
+                )
                 # Use configured grace period (SHARED_STREAM_GRACE) so short client
                 # reconnects (e.g. range-based reconnects from players) don't
                 # immediately kill the transcoding process. Fall back to 1s if
                 # the setting isn't available.
-                grace = int(getattr(settings, 'SHARED_STREAM_GRACE', 1))
-                asyncio.create_task(self._delayed_cleanup_if_empty(
-                    stream_key, grace_period=grace))
+                grace = int(getattr(settings, "SHARED_STREAM_GRACE", 1))
+                asyncio.create_task(
+                    self._delayed_cleanup_if_empty(stream_key, grace_period=grace)
+                )
 
     async def force_stop_stream(self, stream_key: str):
         """
@@ -1097,7 +1184,8 @@ class PooledStreamManager:
             return False
 
         logger.info(
-            f"Force stopping stream {stream_key} and terminating FFmpeg process")
+            f"Force stopping stream {stream_key} and terminating FFmpeg process"
+        )
         process = self.shared_processes[stream_key]
 
         # Remove all clients from this stream immediately
@@ -1110,8 +1198,7 @@ class PooledStreamManager:
         # Immediately cleanup the FFmpeg process
         await self._cleanup_local_process(stream_key)
 
-        logger.info(
-            f"Stream {stream_key} force stopped, FFmpeg process terminated")
+        logger.info(f"Stream {stream_key} force stopped, FFmpeg process terminated")
         return True
 
     async def _delayed_cleanup_if_empty(self, stream_key: str, grace_period: int = 10):
@@ -1130,11 +1217,13 @@ class PooledStreamManager:
         # Check if clients reconnected during grace period
         if not process.clients:
             logger.info(
-                f"Grace period expired for stream {stream_key} with no clients, cleaning up FFmpeg process")
+                f"Grace period expired for stream {stream_key} with no clients, cleaning up FFmpeg process"
+            )
             await self._cleanup_local_process(stream_key)
         else:
             logger.info(
-                f"Clients reconnected to stream {stream_key} during grace period, keeping process alive")
+                f"Clients reconnected to stream {stream_key} during grace period, keeping process alive"
+            )
 
     def update_client_activity(self, client_id: str):
         """Update the last access time for a client."""
@@ -1145,7 +1234,9 @@ class PooledStreamManager:
                 if client_id in process.clients:
                     process.clients[client_id] = time.time()
 
-    async def stream_shared_process(self, client_id: str) -> Optional[asyncio.subprocess.Process]:
+    async def stream_shared_process(
+        self, client_id: str
+    ) -> Optional[asyncio.subprocess.Process]:
         """Get the FFmpeg process for a client's stream"""
 
         if client_id not in self.client_streams:
@@ -1166,7 +1257,7 @@ class PooledStreamManager:
             "sharing_enabled": self.enable_sharing,
             "local_streams": len(self.shared_processes),
             "total_clients": len(self.client_streams),
-            "streams": []
+            "streams": [],
         }
 
         for stream_id, process in self.shared_processes.items():
@@ -1178,7 +1269,7 @@ class PooledStreamManager:
                 "created_at": process.created_at,
                 "last_access": process.last_access,
                 "status": process.status,
-                "total_bytes_served": process.total_bytes_served
+                "total_bytes_served": process.total_bytes_served,
             }
             stats["streams"].append(stream_stats)
 
