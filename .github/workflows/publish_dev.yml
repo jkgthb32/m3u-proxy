@@ -4,7 +4,13 @@ on:
     branches: [dev]
 
 jobs:
+  ci:
+    name: Run CI
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   push-amd64:
+    needs: [ci]
     name: Publish dev m3u-proxy Docker image (amd64)
     runs-on: ubuntu-latest
     steps:
@@ -35,6 +41,7 @@ jobs:
           sbom: false
 
   push-arm64:
+    needs: [ci]
     name: Publish dev m3u-proxy Docker image (arm64)
     runs-on: ubuntu-22.04-arm
     steps:
