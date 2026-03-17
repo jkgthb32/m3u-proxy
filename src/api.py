@@ -1005,7 +1005,7 @@ async def get_hls_playlist(
                 and stream_manager.clients[client_id].stream_id == stream_id
                 and stream_manager.clients[client_id].active_connection_id
                 and stream_manager.clients[client_id].active_connection_id
-                    in stream_manager.connection_cancel_events
+                in stream_manager.connection_cancel_events
                 and not stream_manager.connection_cancel_events[
                     stream_manager.clients[client_id].active_connection_id
                 ].is_set()
@@ -1296,7 +1296,7 @@ async def get_direct_stream(
                 and stream_manager.clients[client_id].stream_id == stream_id
                 and stream_manager.clients[client_id].active_connection_id
                 and stream_manager.clients[client_id].active_connection_id
-                    in stream_manager.connection_cancel_events
+                in stream_manager.connection_cancel_events
                 and not stream_manager.connection_cancel_events[
                     stream_manager.clients[client_id].active_connection_id
                 ].is_set()

@@ -214,13 +214,19 @@ class StreamManager:
         # and broadcasts chunks to subscriber queues. Additional clients read from those queues
         # instead of opening duplicate upstream connections (which waste provider connection
         # slots and may cause the provider to kill the original connection).
-        self._direct_broadcast_queues: Dict[str, Dict[str, asyncio.Queue]] = {}  # stream_id -> {connection_id: queue}
-        self._direct_broadcast_primary: Dict[str, str] = {}  # stream_id -> primary connection_id
+        self._direct_broadcast_queues: Dict[
+            str, Dict[str, asyncio.Queue]
+        ] = {}  # stream_id -> {connection_id: queue}
+        self._direct_broadcast_primary: Dict[
+            str, str
+        ] = {}  # stream_id -> primary connection_id
         # Upstream connection handoff for seamless subscriber promotion.
         # When a primary disconnects, we hand off its existing upstream
         # connection so the promoted subscriber can continue without opening
         # a new TCP connection (which would cause a ~250ms gap/skip).
-        self._handoff_upstream: Dict[str, tuple] = {}  # stream_id -> (stream_context, response, stream_iterator)
+        self._handoff_upstream: Dict[
+            str, tuple
+        ] = {}  # stream_id -> (stream_context, response, stream_iterator)
 
         # Pooling configuration
         self.enable_pooling = enable_pooling
@@ -861,7 +867,9 @@ class StreamManager:
             try:
                 while True:
                     try:
-                        chunk = await asyncio.wait_for(queue.get(), timeout=queue_timeout)
+                        chunk = await asyncio.wait_for(
+                            queue.get(), timeout=queue_timeout
+                        )
                     except asyncio.TimeoutError:
                         consecutive_timeouts += 1
                         if cancel_event.is_set():
@@ -877,7 +885,9 @@ class StreamManager:
                         primary_conn_id = self._direct_broadcast_primary.get(stream_id)
                         primary_gone = primary_conn_id is None
                         if not primary_gone and primary_conn_id:
-                            primary_cancel = self.connection_cancel_events.get(primary_conn_id)
+                            primary_cancel = self.connection_cancel_events.get(
+                                primary_conn_id
+                            )
                             if primary_cancel is None or primary_cancel.is_set():
                                 primary_gone = True
                         if not primary_gone and consecutive_timeouts >= 2:
@@ -934,7 +944,9 @@ class StreamManager:
                     if client_id in self.clients:
                         self.clients[client_id].bytes_served += len(chunk)
                         self.clients[client_id].last_access = datetime.now(timezone.utc)
-                        self.clients[client_id].last_data_time = datetime.now(timezone.utc)
+                        self.clients[client_id].last_data_time = datetime.now(
+                            timezone.utc
+                        )
 
             finally:
                 # Remove this subscriber's queue
@@ -1059,7 +1071,9 @@ class StreamManager:
             # Reuse the inherited iterator if available — it continues from
             # exactly where the old primary left off (same TCP connection,
             # same byte position).  Otherwise create a fresh one.
-            stream_iterator = inherited_iterator or response.aiter_bytes(chunk_size=32768)
+            stream_iterator = inherited_iterator or response.aiter_bytes(
+                chunk_size=32768
+            )
 
             while True:
                 try:
@@ -1094,9 +1108,7 @@ class StreamManager:
                     self.streams[stream_id].last_access = datetime.now(timezone.utc)
 
         except Exception as e:
-            logger.error(
-                f"Error in promoted primary for stream {stream_id}: {e}"
-            )
+            logger.error(f"Error in promoted primary for stream {stream_id}: {e}")
         finally:
             if stream_context is not None:
                 try:
@@ -1156,10 +1168,7 @@ class StreamManager:
         # upstream connection. Duplicate connections waste provider connection slots and
         # may cause the provider to kill the original connection after a few seconds.
         # VOD is excluded because each client needs independent Range request support.
-        if (
-            not stream_info.is_vod
-            and stream_id in self._direct_broadcast_primary
-        ):
+        if not stream_info.is_vod and stream_id in self._direct_broadcast_primary:
             return await self._serve_subscriber_stream(
                 stream_id, client_id, connection_id, cancel_event
             )
@@ -1293,336 +1302,326 @@ class StreamManager:
             # stops iterating after client disconnect, so post-loop code
             # after the while is unreachable).  The call is idempotent.
             try:
-              # Main streaming loop with automatic reconnection on failover
-              while failover_count <= max_failovers:
-                # Check cancel_event at the top of each iteration so we
-                # exit promptly when the ASGI disconnect monitor fires
-                # instead of starting another connection attempt.
-                if cancel_event.is_set():
-                    logger.info(
-                        f"Cancel event set before connection attempt for client {client_id}, exiting"
-                    )
-                    break
-
-                try:
-                    # Get current URL (may have changed due to failover)
-                    active_url = stream_info.current_url or stream_info.original_url
-
-                    # Emit stream started event (or resumed after failover)
-                    if failover_count == 0:
-                        await self._emit_event(
-                            "STREAM_STARTED",
-                            stream_id,
-                            {
-                                "url": active_url,
-                                "client_id": client_id,
-                                "mode": "direct_proxy",
-                                "metadata": stream_info.metadata,
-                            },
-                        )
-                    else:
+                # Main streaming loop with automatic reconnection on failover
+                while failover_count <= max_failovers:
+                    # Check cancel_event at the top of each iteration so we
+                    # exit promptly when the ASGI disconnect monitor fires
+                    # instead of starting another connection attempt.
+                    if cancel_event.is_set():
                         logger.info(
-                            f"Reconnecting client {client_id} to failover URL: {active_url}"
+                            f"Cancel event set before connection attempt for client {client_id}, exiting"
                         )
+                        break
 
-                    # Prepare headers
-                    headers = {
-                        "User-Agent": stream_info.user_agent,
-                        "Referer": f"{urlparse(active_url).scheme}://{urlparse(active_url).netloc}/",
-                        "Origin": f"{urlparse(active_url).scheme}://{urlparse(active_url).netloc}",
-                        "Accept": "*/*",
-                        "Connection": "keep-alive",
-                    }
-                    headers.update(stream_info.headers)
+                    try:
+                        # Get current URL (may have changed due to failover)
+                        active_url = stream_info.current_url or stream_info.original_url
 
-                    # IMPORTANT: Do NOT send Range headers for live continuous streams
-                    # Live IPTV streams (.ts) are infinite and don't support range requests
-                    # Range requests can cause providers to immediately close the connection
-                    # In strict mode, we are even more aggressive about stripping Range headers
-                    if range_header:
-                        if stream_info.is_live_continuous:
-                            # Never send Range for live streams
-                            if strict_mode_enabled:
-                                logger.info(
-                                    f"STRICT MODE: Completely stripping Range header for live TS stream: {range_header}"
-                                )
-                            else:
-                                logger.info(
-                                    "Ignoring Range header for live stream (not supported)"
-                                )
-                        elif not strict_mode_enabled:
-                            # VOD stream, not in strict mode - honor range request
-                            if resume_from_byte is not None:
-                                headers["Range"] = f"bytes={resume_from_byte}-"
-                                logger.info(
-                                    f"Resuming VOD upstream from byte {resume_from_byte}"
-                                )
-                            else:
-                                headers["Range"] = range_header
-                                logger.info(
-                                    f"Including Range header for VOD stream: {range_header}"
-                                )
+                        # Emit stream started event (or resumed after failover)
+                        if failover_count == 0:
+                            await self._emit_event(
+                                "STREAM_STARTED",
+                                stream_id,
+                                {
+                                    "url": active_url,
+                                    "client_id": client_id,
+                                    "mode": "direct_proxy",
+                                    "metadata": stream_info.metadata,
+                                },
+                            )
+                        else:
+                            logger.info(
+                                f"Reconnecting client {client_id} to failover URL: {active_url}"
+                            )
 
-                    # Select appropriate HTTP client
-                    client_to_use = (
-                        self.live_stream_client
-                        if stream_info.is_live_continuous
-                        else self.http_client
-                    )
+                        # Prepare headers
+                        headers = {
+                            "User-Agent": stream_info.user_agent,
+                            "Referer": f"{urlparse(active_url).scheme}://{urlparse(active_url).netloc}/",
+                            "Origin": f"{urlparse(active_url).scheme}://{urlparse(active_url).netloc}",
+                            "Accept": "*/*",
+                            "Connection": "keep-alive",
+                        }
+                        headers.update(stream_info.headers)
 
-                    # OPEN provider connection - happens ONLY when client starts consuming
-                    logger.info(
-                        f"Opening provider connection for {stream_id} to {active_url}"
-                    )
-
-                    # Get the stream context manager
-                    stream_context = client_to_use.stream(
-                        "GET", active_url, headers=headers, follow_redirects=True
-                    )
-                    # If the client returned a coroutine (test stub), await it to get the context manager
-                    if asyncio.iscoroutine(stream_context):
-                        stream_context = await stream_context
-                    # Enter the context to get the response object
-                    response = await stream_context.__aenter__()
-
-                    # Now we can call methods on the actual response object
-                    response.raise_for_status()
-
-                    # Capture provider response details for proper HTTP 206 handling
-                    provider_status_code = response.status_code
-                    provider_content_range = response.headers.get("content-range")
-                    provider_content_length = response.headers.get("content-length")
-
-                    logger.info(
-                        f"Provider connected: {response.status_code}, Content-Type: {response.headers.get('content-type')}"
-                    )
-                    if provider_content_range:
-                        logger.info(f"Provider Content-Range: {provider_content_range}")
-
-                    # Reset retry counter on successful connection
-                    # This gives us fresh retries for any issues during streaming
-                    if retry_count > 0:
-                        logger.info(
-                            f"Connection successful after {retry_count} retries, resetting retry counter"
-                        )
-                        retry_count = 0
-                    # Clear any previous error status code on successful connection
-                    stream_info.last_error_status_code = None
-
-                    # Create a single iterator for the response stream
-                    # IMPORTANT: Async iterators can only be consumed once! We must use the same
-                    # iterator for both pre-buffering and main streaming. The pre-buffer phase yields
-                    # chunks directly (no storage), then breaks to let the main loop continue seamlessly.
-                    stream_iterator = response.aiter_bytes(chunk_size=32768)
-
-                    # Initialize last_chunk_time for circuit breaker tracking
-                    last_chunk_time = asyncio.get_event_loop().time()
-
-                    # Pre-buffering for Strict Live TS Mode
-                    target_prebuffer = (
-                        settings.STRICT_LIVE_TS_PREBUFFER_SIZE
-                        if strict_mode_enabled and stream_info.is_live_continuous
-                        else 0
-                    )
-
-                    if target_prebuffer > 0:
-                        logger.info(
-                            f"STRICT MODE: Pre-buffering {target_prebuffer} bytes (~0.5-1s) before streaming to client {client_id}"
-                        )
-                        prebuffer_start = asyncio.get_event_loop().time()
-                        prebuffer_timeout = settings.STRICT_LIVE_TS_PREBUFFER_TIMEOUT
-                        prebuffer_size = 0
-                        prebuffer_chunks = 0
-                        # Use per-chunk timeout to avoid blocking indefinitely when upstream stalls
-                        chunk_timeout = (
-                            settings.LIVE_CHUNK_TIMEOUT_SECONDS
-                            if hasattr(settings, "LIVE_CHUNK_TIMEOUT_SECONDS")
-                            else 5.0
-                        )
-
-                        # Pre-buffer by reading from the iterator until we reach target
-                        while True:
-                            try:
-                                if chunk_timeout and chunk_timeout > 0:
-                                    chunk = await asyncio.wait_for(
-                                        stream_iterator.__anext__(),
-                                        timeout=chunk_timeout,
+                        # IMPORTANT: Do NOT send Range headers for live continuous streams
+                        # Live IPTV streams (.ts) are infinite and don't support range requests
+                        # Range requests can cause providers to immediately close the connection
+                        # In strict mode, we are even more aggressive about stripping Range headers
+                        if range_header:
+                            if stream_info.is_live_continuous:
+                                # Never send Range for live streams
+                                if strict_mode_enabled:
+                                    logger.info(
+                                        f"STRICT MODE: Completely stripping Range header for live TS stream: {range_header}"
                                     )
                                 else:
-                                    chunk = await stream_iterator.__anext__()
-
-                                # Yield immediately - no separate storage needed
-                                yield chunk
-                                self._broadcast_chunk_to_subscribers(stream_id, chunk)
-                                bytes_served += len(chunk)
-                                chunk_count += 1
-                                prebuffer_size += len(chunk)
-                                prebuffer_chunks += 1
-
-                                # Update last chunk time for circuit breaker
-                                last_chunk_time = asyncio.get_event_loop().time()
-
-                                # Check timeout for prebuffer overall
-                                if (
-                                    asyncio.get_event_loop().time() - prebuffer_start
-                                    > prebuffer_timeout
-                                ):
-                                    logger.warning(
-                                        f"STRICT MODE: Pre-buffer timeout after {prebuffer_timeout}s, proceeding with {prebuffer_size} bytes"
-                                    )
-                                    break
-
-                                # Reached target - break and continue with normal streaming
-                                if prebuffer_size >= target_prebuffer:
                                     logger.info(
-                                        f"STRICT MODE: Pre-buffer complete: {prebuffer_size} bytes in {prebuffer_chunks} chunks"
+                                        "Ignoring Range header for live stream (not supported)"
                                     )
-                                    break
+                            elif not strict_mode_enabled:
+                                # VOD stream, not in strict mode - honor range request
+                                if resume_from_byte is not None:
+                                    headers["Range"] = f"bytes={resume_from_byte}-"
+                                    logger.info(
+                                        f"Resuming VOD upstream from byte {resume_from_byte}"
+                                    )
+                                else:
+                                    headers["Range"] = range_header
+                                    logger.info(
+                                        f"Including Range header for VOD stream: {range_header}"
+                                    )
 
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    f"STRICT MODE: Pre-buffer chunk timeout ({chunk_timeout}s), proceeding with {prebuffer_size} bytes"
-                                )
-                                break
-                            except StopAsyncIteration:
-                                # Upstream closed during pre-buffer; exit prebuffer loop
-                                logger.info(
-                                    "STRICT MODE: Upstream closed during pre-buffer"
-                                )
-                                break
-
-                        logger.info(
-                            f"STRICT MODE: Emitted pre-buffer, now streaming live for client {client_id}"
+                        # Select appropriate HTTP client
+                        client_to_use = (
+                            self.live_stream_client
+                            if stream_info.is_live_continuous
+                            else self.http_client
                         )
 
-                    # Direct byte-for-byte proxy - Continue with the SAME iterator
-                    # Track time of last received chunk for circuit breaker
-                    circuit_breaker_timeout = (
-                        settings.STRICT_LIVE_TS_CIRCUIT_BREAKER_TIMEOUT
-                        if strict_mode_enabled
-                        else 0
-                    )
+                        # OPEN provider connection - happens ONLY when client starts consuming
+                        logger.info(
+                            f"Opening provider connection for {stream_id} to {active_url}"
+                        )
 
-                    # Continue streaming from where pre-buffer left off (or from start if no pre-buffer)
-                    while True:
-                        try:
-                            # Read next chunk with a per-chunk timeout to detect silent stalls
+                        # Get the stream context manager
+                        stream_context = client_to_use.stream(
+                            "GET", active_url, headers=headers, follow_redirects=True
+                        )
+                        # If the client returned a coroutine (test stub), await it to get the context manager
+                        if asyncio.iscoroutine(stream_context):
+                            stream_context = await stream_context
+                        # Enter the context to get the response object
+                        response = await stream_context.__aenter__()
+
+                        # Now we can call methods on the actual response object
+                        response.raise_for_status()
+
+                        # Capture provider response details for proper HTTP 206 handling
+                        provider_status_code = response.status_code
+                        provider_content_range = response.headers.get("content-range")
+                        provider_content_length = response.headers.get("content-length")
+
+                        logger.info(
+                            f"Provider connected: {response.status_code}, Content-Type: {response.headers.get('content-type')}"
+                        )
+                        if provider_content_range:
+                            logger.info(
+                                f"Provider Content-Range: {provider_content_range}"
+                            )
+
+                        # Reset retry counter on successful connection
+                        # This gives us fresh retries for any issues during streaming
+                        if retry_count > 0:
+                            logger.info(
+                                f"Connection successful after {retry_count} retries, resetting retry counter"
+                            )
+                            retry_count = 0
+                        # Clear any previous error status code on successful connection
+                        stream_info.last_error_status_code = None
+
+                        # Create a single iterator for the response stream
+                        # IMPORTANT: Async iterators can only be consumed once! We must use the same
+                        # iterator for both pre-buffering and main streaming. The pre-buffer phase yields
+                        # chunks directly (no storage), then breaks to let the main loop continue seamlessly.
+                        stream_iterator = response.aiter_bytes(chunk_size=32768)
+
+                        # Initialize last_chunk_time for circuit breaker tracking
+                        last_chunk_time = asyncio.get_event_loop().time()
+
+                        # Pre-buffering for Strict Live TS Mode
+                        target_prebuffer = (
+                            settings.STRICT_LIVE_TS_PREBUFFER_SIZE
+                            if strict_mode_enabled and stream_info.is_live_continuous
+                            else 0
+                        )
+
+                        if target_prebuffer > 0:
+                            logger.info(
+                                f"STRICT MODE: Pre-buffering {target_prebuffer} bytes (~0.5-1s) before streaming to client {client_id}"
+                            )
+                            prebuffer_start = asyncio.get_event_loop().time()
+                            prebuffer_timeout = (
+                                settings.STRICT_LIVE_TS_PREBUFFER_TIMEOUT
+                            )
+                            prebuffer_size = 0
+                            prebuffer_chunks = 0
+                            # Use per-chunk timeout to avoid blocking indefinitely when upstream stalls
                             chunk_timeout = (
                                 settings.LIVE_CHUNK_TIMEOUT_SECONDS
                                 if hasattr(settings, "LIVE_CHUNK_TIMEOUT_SECONDS")
                                 else 5.0
                             )
-                            if chunk_timeout and chunk_timeout > 0:
+
+                            # Pre-buffer by reading from the iterator until we reach target
+                            while True:
                                 try:
-                                    chunk = await asyncio.wait_for(
-                                        stream_iterator.__anext__(),
-                                        timeout=chunk_timeout,
-                                    )
-                                except asyncio.TimeoutError:
-                                    # No data received within chunk timeout
-                                    logger.warning(
-                                        f"No data received for {chunk_timeout}s from upstream for stream {stream_id}, client {client_id}"
-                                    )
+                                    if chunk_timeout and chunk_timeout > 0:
+                                        chunk = await asyncio.wait_for(
+                                            stream_iterator.__anext__(),
+                                            timeout=chunk_timeout,
+                                        )
+                                    else:
+                                        chunk = await stream_iterator.__anext__()
 
-                                    # Check if we've exceeded total timeout across all retries
-                                    elapsed_total = (
-                                        asyncio.get_event_loop().time()
-                                        - total_timeout_start
+                                    # Yield immediately - no separate storage needed
+                                    yield chunk
+                                    self._broadcast_chunk_to_subscribers(
+                                        stream_id, chunk
                                     )
-                                    total_timeout_exceeded = (
-                                        total_timeout > 0
-                                        and elapsed_total > total_timeout
-                                    )
+                                    bytes_served += len(chunk)
+                                    chunk_count += 1
+                                    prebuffer_size += len(chunk)
+                                    prebuffer_chunks += 1
 
-                                    # Try retrying the current URL first before failover
-                                    allow_initial_retry = (
-                                        not stream_info.is_vod
-                                    ) or bytes_served == 0
+                                    # Update last chunk time for circuit breaker
+                                    last_chunk_time = asyncio.get_event_loop().time()
+
+                                    # Check timeout for prebuffer overall
                                     if (
-                                        retry_count < max_retries
-                                        and not total_timeout_exceeded
-                                        and allow_initial_retry
+                                        asyncio.get_event_loop().time()
+                                        - prebuffer_start
+                                        > prebuffer_timeout
                                     ):
-                                        retry_count += 1
-                                        current_delay = (
-                                            retry_delay * (1.5 ** (retry_count - 1))
-                                            if settings.STREAM_RETRY_EXPONENTIAL_BACKOFF
-                                            else retry_delay
+                                        logger.warning(
+                                            f"STRICT MODE: Pre-buffer timeout after {prebuffer_timeout}s, proceeding with {prebuffer_size} bytes"
                                         )
-                                        logger.info(
-                                            f"Retrying connection for stream {stream_id}, client {client_id} "
-                                            f"(attempt {retry_count}/{max_retries}, delay: {current_delay}s)"
-                                        )
-
-                                        # Clean up current connection
-                                        if stream_context is not None:
-                                            try:
-                                                await stream_context.__aexit__(
-                                                    None, None, None
-                                                )
-                                            except Exception:
-                                                pass
-                                        stream_context = None
-                                        response = None
-
-                                        # Wait before retrying (cancel-aware)
-                                        try:
-                                            await asyncio.wait_for(
-                                                cancel_event.wait(),
-                                                timeout=current_delay,
-                                            )
-                                            # cancel_event fired during wait
-                                            break
-                                        except asyncio.TimeoutError:
-                                            pass
-
-                                        # Break to reconnect with same URL
                                         break
 
-                                    # Retries exhausted or total timeout exceeded, try failover
-                                    has_failover = bool(
-                                        stream_info.failover_resolver_url
-                                        or stream_info.failover_urls
-                                    )
-                                    if (
-                                        has_failover
-                                        and failover_count < max_failovers
-                                        and not stream_info.is_vod
-                                    ):
+                                    # Reached target - break and continue with normal streaming
+                                    if prebuffer_size >= target_prebuffer:
                                         logger.info(
-                                            f"Retries exhausted, attempting failover due to chunk timeout for client {client_id} "
-                                            f"(failover attempt {failover_count + 1}/{max_failovers})"
+                                            f"STRICT MODE: Pre-buffer complete: {prebuffer_size} bytes in {prebuffer_chunks} chunks"
                                         )
-                                        failover_ok = (
-                                            await self._try_update_failover_url(
-                                                stream_id, "chunk_timeout_after_retries"
-                                            )
+                                        break
+
+                                except asyncio.TimeoutError:
+                                    logger.warning(
+                                        f"STRICT MODE: Pre-buffer chunk timeout ({chunk_timeout}s), proceeding with {prebuffer_size} bytes"
+                                    )
+                                    break
+                                except StopAsyncIteration:
+                                    # Upstream closed during pre-buffer; exit prebuffer loop
+                                    logger.info(
+                                        "STRICT MODE: Upstream closed during pre-buffer"
+                                    )
+                                    break
+
+                            logger.info(
+                                f"STRICT MODE: Emitted pre-buffer, now streaming live for client {client_id}"
+                            )
+
+                        # Direct byte-for-byte proxy - Continue with the SAME iterator
+                        # Track time of last received chunk for circuit breaker
+                        circuit_breaker_timeout = (
+                            settings.STRICT_LIVE_TS_CIRCUIT_BREAKER_TIMEOUT
+                            if strict_mode_enabled
+                            else 0
+                        )
+
+                        # Continue streaming from where pre-buffer left off (or from start if no pre-buffer)
+                        while True:
+                            try:
+                                # Read next chunk with a per-chunk timeout to detect silent stalls
+                                chunk_timeout = (
+                                    settings.LIVE_CHUNK_TIMEOUT_SECONDS
+                                    if hasattr(settings, "LIVE_CHUNK_TIMEOUT_SECONDS")
+                                    else 5.0
+                                )
+                                if chunk_timeout and chunk_timeout > 0:
+                                    try:
+                                        chunk = await asyncio.wait_for(
+                                            stream_iterator.__anext__(),
+                                            timeout=chunk_timeout,
                                         )
-                                        failover_count += 1
-                                        if not failover_ok:
-                                            logger.warning(
-                                                f"Failover failed for stream {stream_id}, giving up"
+                                    except asyncio.TimeoutError:
+                                        # No data received within chunk timeout
+                                        logger.warning(
+                                            f"No data received for {chunk_timeout}s from upstream for stream {stream_id}, client {client_id}"
+                                        )
+
+                                        # Check if we've exceeded total timeout across all retries
+                                        elapsed_total = (
+                                            asyncio.get_event_loop().time()
+                                            - total_timeout_start
+                                        )
+                                        total_timeout_exceeded = (
+                                            total_timeout > 0
+                                            and elapsed_total > total_timeout
+                                        )
+
+                                        # Try retrying the current URL first before failover
+                                        allow_initial_retry = (
+                                            not stream_info.is_vod
+                                        ) or bytes_served == 0
+                                        if (
+                                            retry_count < max_retries
+                                            and not total_timeout_exceeded
+                                            and allow_initial_retry
+                                        ):
+                                            retry_count += 1
+                                            current_delay = (
+                                                retry_delay * (1.5 ** (retry_count - 1))
+                                                if settings.STREAM_RETRY_EXPONENTIAL_BACKOFF
+                                                else retry_delay
                                             )
-                                            break
-                                        # Reset retry counter for new URL
-                                        retry_count = 0
-                                        if stream_context is not None:
-                                            try:
-                                                await stream_context.__aexit__(
-                                                    None, None, None
-                                                )
-                                            except Exception:
-                                                pass
-                                        stream_context = None
-                                        response = None
-                                        break  # Reconnect with new URL
-                                    else:
-                                        # Sticky-session recovery path: if we were pinned to a redirected backend,
-                                        # reset to the configured entry URL and reconnect once before failing.
-                                        if _recover_sticky_origin_if_needed():
                                             logger.info(
-                                                f"Retrying stream {stream_id} after sticky origin recovery"
+                                                f"Retrying connection for stream {stream_id}, client {client_id} "
+                                                f"(attempt {retry_count}/{max_retries}, delay: {current_delay}s)"
                                             )
+
+                                            # Clean up current connection
+                                            if stream_context is not None:
+                                                try:
+                                                    await stream_context.__aexit__(
+                                                        None, None, None
+                                                    )
+                                                except Exception:
+                                                    pass
+                                            stream_context = None
+                                            response = None
+
+                                            # Wait before retrying (cancel-aware)
+                                            try:
+                                                await asyncio.wait_for(
+                                                    cancel_event.wait(),
+                                                    timeout=current_delay,
+                                                )
+                                                # cancel_event fired during wait
+                                                break
+                                            except asyncio.TimeoutError:
+                                                pass
+
+                                            # Break to reconnect with same URL
+                                            break
+
+                                        # Retries exhausted or total timeout exceeded, try failover
+                                        has_failover = bool(
+                                            stream_info.failover_resolver_url
+                                            or stream_info.failover_urls
+                                        )
+                                        if (
+                                            has_failover
+                                            and failover_count < max_failovers
+                                            and not stream_info.is_vod
+                                        ):
+                                            logger.info(
+                                                f"Retries exhausted, attempting failover due to chunk timeout for client {client_id} "
+                                                f"(failover attempt {failover_count + 1}/{max_failovers})"
+                                            )
+                                            failover_ok = (
+                                                await self._try_update_failover_url(
+                                                    stream_id,
+                                                    "chunk_timeout_after_retries",
+                                                )
+                                            )
+                                            failover_count += 1
+                                            if not failover_ok:
+                                                logger.warning(
+                                                    f"Failover failed for stream {stream_id}, giving up"
+                                                )
+                                                break
+                                            # Reset retry counter for new URL
                                             retry_count = 0
                                             if stream_context is not None:
                                                 try:
@@ -1633,177 +1632,15 @@ class StreamManager:
                                                     pass
                                             stream_context = None
                                             response = None
-                                            continue
-
-                                        # For VOD, upstream can stall; reconnect instead of terminating client stream
-                                        if (
-                                            stream_info.is_vod
-                                            and bytes_served > 0
-                                            and vod_reconnects < max_vod_reconnects
-                                        ):
-                                            vod_reconnects += 1
-                                            resume_from_byte = (
-                                                range_start + bytes_served
-                                            )
-                                            logger.warning(
-                                                f"VOD chunk timeout ({chunk_timeout}s); reconnecting from byte {resume_from_byte} "
-                                                f"(attempt {vod_reconnects}/{max_vod_reconnects})"
-                                            )
-                                            if stream_context is not None:
-                                                try:
-                                                    await stream_context.__aexit__(
-                                                        None, None, None
-                                                    )
-                                                except Exception:
-                                                    pass
-                                            stream_context = None
-                                            response = None
-                                            break  # break inner loop -> reconnect outer loop
+                                            break  # Reconnect with new URL
                                         else:
-                                            reason = (
-                                                "total_timeout_exceeded"
-                                                if total_timeout_exceeded
-                                                else "no_failover_available"
-                                            )
-                                            await self._emit_event(
-                                                "STREAM_FAILED",
-                                                stream_id,
-                                                {
-                                                    "client_id": client_id,
-                                                    "error": f"No data received for {chunk_timeout}s",
-                                                    "error_type": "chunk_timeout",
-                                                    "reason": reason,
-                                                    "retry_count": retry_count,
-                                                    "no_failover": not has_failover,
-                                                },
-                                            )
-                                            # Terminate streaming — break to
-                                            # post-loop cleanup so subscribers
-                                            # are signaled and client is cleaned up.
-                                            break
-
-                            else:
-                                chunk = await stream_iterator.__anext__()
-                        except StopAsyncIteration:
-                            break
-                        # Update last chunk time
-                        last_chunk_time = asyncio.get_event_loop().time()
-
-                        # Check if streaming should be cancelled
-                        if cancel_event.is_set():
-                            logger.info(
-                                f"Streaming cancelled for client {client_id} by external request"
-                            )
-                            break
-
-                        # Check for failover event
-                        if stream_info.failover_event.is_set():
-                            stream_info.failover_event.clear()  # Clear immediately to prevent infinite loop
-                            logger.info(
-                                f"Failover detected for stream {stream_id}, reconnecting client {client_id}"
-                            )
-                            # Reset per-client monitoring state for new connection
-                            if settings.ENABLE_SILENCE_DETECTION:
-                                silence_audio_buffer = b""
-                                silence_monitoring_started = False
-                                silence_check_start_time = None
-                                silence_count = 0
-                            if settings.ENABLE_BITRATE_MONITORING:
-                                bitrate_monitoring_started = False
-                                bitrate_check_start_time = None
-                                bitrate_bytes_window = 0
-                                low_bitrate_count = 0
-                            # Close current connection
-                            if stream_context is not None:
-                                try:
-                                    await stream_context.__aexit__(None, None, None)
-                                except Exception:
-                                    pass
-                            stream_context = None
-                            response = None
-                            failover_count += 1
-                            # Break inner loop to reconnect with new URL
-                            break
-
-                        yield chunk
-                        self._broadcast_chunk_to_subscribers(stream_id, chunk)
-                        bytes_served += len(chunk)
-                        chunk_count += 1
-
-                        # Bitrate monitoring - detect degraded streams
-                        # State is per-client (local vars) to avoid corruption when
-                        # multiple clients share the same StreamInfo.
-                        if settings.ENABLE_BITRATE_MONITORING and stream_info:
-                            current_time = asyncio.get_event_loop().time()
-
-                            # Grace period - don't monitor during initial buffering
-                            if not bitrate_monitoring_started:
-                                if bitrate_check_start_time is None:
-                                    bitrate_check_start_time = current_time
-                                elif (
-                                    current_time - bitrate_check_start_time
-                                    >= settings.BITRATE_MONITORING_GRACE_PERIOD
-                                ):
-                                    # Grace period over, start real monitoring
-                                    bitrate_monitoring_started = True
-                                    bitrate_check_start_time = current_time
-                                    bitrate_bytes_window = 0
-                            else:
-                                # Add bytes to current window
-                                bitrate_bytes_window += len(chunk)
-
-                                # Check if interval elapsed
-                                elapsed = current_time - (
-                                    bitrate_check_start_time or current_time
-                                )
-                                if elapsed >= settings.BITRATE_CHECK_INTERVAL:
-                                    # Calculate bitrate in bytes/second
-                                    bitrate = (
-                                        bitrate_bytes_window / elapsed
-                                        if elapsed > 0
-                                        else 0
-                                    )
-
-                                    if bitrate < settings.MIN_BITRATE_THRESHOLD:
-                                        low_bitrate_count += 1
-                                        logger.warning(
-                                            f"Low bitrate detected for stream {stream_id}: "
-                                            f"{bitrate:.0f} B/s ({bitrate * 8 / 1000:.0f} Kbps), "
-                                            f"threshold: {settings.MIN_BITRATE_THRESHOLD * 8 / 1000:.0f} Kbps, "
-                                            f"count: {low_bitrate_count}/{settings.BITRATE_FAILOVER_THRESHOLD}"
-                                        )
-
-                                        # Trigger failover if threshold exceeded
-                                        # Skip failover for VOD/timeshift since it's provider-specific
-                                        if (
-                                            low_bitrate_count
-                                            >= settings.BITRATE_FAILOVER_THRESHOLD
-                                        ):
-                                            has_failover = bool(
-                                                stream_info.failover_resolver_url
-                                                or stream_info.failover_urls
-                                            )
-                                            if (
-                                                has_failover
-                                                and failover_count < max_failovers
-                                                and not stream_info.is_vod
-                                            ):
-                                                logger.error(
-                                                    f"Bitrate consistently below threshold for stream {stream_id}, "
-                                                    f"triggering failover (attempt {failover_count + 1}/{max_failovers})"
+                                            # Sticky-session recovery path: if we were pinned to a redirected backend,
+                                            # reset to the configured entry URL and reconnect once before failing.
+                                            if _recover_sticky_origin_if_needed():
+                                                logger.info(
+                                                    f"Retrying stream {stream_id} after sticky origin recovery"
                                                 )
-                                                await self._try_update_failover_url(
-                                                    stream_id, "low_bitrate"
-                                                )
-                                                # Reset bitrate monitoring for new connection
-                                                low_bitrate_count = 0
-                                                bitrate_monitoring_started = False
-                                                bitrate_check_start_time = (
-                                                    None
-                                                )
-                                                bitrate_bytes_window = 0
-                                                failover_count += 1
-                                                # Close current connection
+                                                retry_count = 0
                                                 if stream_context is not None:
                                                     try:
                                                         await stream_context.__aexit__(
@@ -1813,111 +1650,22 @@ class StreamManager:
                                                         pass
                                                 stream_context = None
                                                 response = None
-                                                break  # Reconnect with new URL
-                                    else:
-                                        # Good bitrate - reset counter
-                                        if low_bitrate_count > 0:
-                                            logger.info(
-                                                f"Bitrate recovered for stream {stream_id}: "
-                                                f"{bitrate * 8 / 1000:.0f} Kbps, resetting low bitrate counter"
-                                            )
-                                        low_bitrate_count = 0
+                                                continue
 
-                                    # Reset window for next interval
-                                    bitrate_check_start_time = current_time
-                                    bitrate_bytes_window = 0
-
-                        # Silence detection - detect silent audio streams
-                        # Per-stream setting takes precedence over global ENV var
-                        # State is per-client (local vars) to avoid corruption when
-                        # multiple clients share the same StreamInfo.
-                        silence_enabled = (
-                            stream_info.enable_silence_detection
-                            if stream_info.enable_silence_detection is not None
-                            else settings.ENABLE_SILENCE_DETECTION
-                        )
-                        if silence_enabled and stream_info and not stream_info.is_vod:
-                            current_time = asyncio.get_event_loop().time()
-                            eff_grace = (
-                                stream_info.silence_monitoring_grace_period
-                                if stream_info.silence_monitoring_grace_period
-                                is not None
-                                else settings.SILENCE_MONITORING_GRACE_PERIOD
-                            )
-                            eff_interval = (
-                                stream_info.silence_check_interval
-                                if stream_info.silence_check_interval is not None
-                                else settings.SILENCE_CHECK_INTERVAL
-                            )
-                            eff_threshold = (
-                                stream_info.silence_failover_threshold
-                                if stream_info.silence_failover_threshold is not None
-                                else settings.SILENCE_FAILOVER_THRESHOLD
-                            )
-
-                            if not silence_monitoring_started:
-                                if silence_check_start_time is None:
-                                    silence_check_start_time = current_time
-                                elif (
-                                    current_time - silence_check_start_time
-                                    >= eff_grace
-                                ):
-                                    silence_monitoring_started = True
-                                    silence_check_start_time = current_time
-                                    silence_audio_buffer = b""
-                            else:
-                                # Cap buffer at 5MB to bound memory usage on high-bitrate streams
-                                if (
-                                    len(silence_audio_buffer)
-                                    < 5 * 1024 * 1024
-                                ):
-                                    silence_audio_buffer += chunk
-
-                                elapsed = current_time - (
-                                    silence_check_start_time or current_time
-                                )
-                                if elapsed >= eff_interval:
-                                    audio_buffer = silence_audio_buffer
-                                    silence_audio_buffer = b""
-                                    silence_check_start_time = current_time
-
-                                    is_silent = await self._analyze_audio_silence(
-                                        audio_buffer,
-                                        stream_id,
-                                        threshold_db=stream_info.silence_threshold_db,
-                                        duration=stream_info.silence_duration,
-                                    )
-
-                                    if is_silent:
-                                        silence_count += 1
-                                        logger.warning(
-                                            f"Silence detected for stream {stream_id}, "
-                                            f"count: {silence_count}/{eff_threshold}"
-                                        )
-
-                                        if silence_count >= eff_threshold:
-                                            has_failover = bool(
-                                                stream_info.failover_resolver_url
-                                                or stream_info.failover_urls
-                                            )
+                                            # For VOD, upstream can stall; reconnect instead of terminating client stream
                                             if (
-                                                has_failover
-                                                and failover_count < max_failovers
+                                                stream_info.is_vod
+                                                and bytes_served > 0
+                                                and vod_reconnects < max_vod_reconnects
                                             ):
-                                                logger.error(
-                                                    f"Persistent silence detected for stream {stream_id}, "
-                                                    f"triggering failover (attempt {failover_count + 1}/{max_failovers})"
+                                                vod_reconnects += 1
+                                                resume_from_byte = (
+                                                    range_start + bytes_served
                                                 )
-                                                await self._try_update_failover_url(
-                                                    stream_id, "silence_detected"
+                                                logger.warning(
+                                                    f"VOD chunk timeout ({chunk_timeout}s); reconnecting from byte {resume_from_byte} "
+                                                    f"(attempt {vod_reconnects}/{max_vod_reconnects})"
                                                 )
-                                                silence_count = 0
-                                                silence_monitoring_started = False
-                                                silence_check_start_time = (
-                                                    None
-                                                )
-                                                silence_audio_buffer = b""
-                                                failover_count += 1
                                                 if stream_context is not None:
                                                     try:
                                                         await stream_context.__aexit__(
@@ -1927,102 +1675,61 @@ class StreamManager:
                                                         pass
                                                 stream_context = None
                                                 response = None
+                                                break  # break inner loop -> reconnect outer loop
+                                            else:
+                                                reason = (
+                                                    "total_timeout_exceeded"
+                                                    if total_timeout_exceeded
+                                                    else "no_failover_available"
+                                                )
+                                                await self._emit_event(
+                                                    "STREAM_FAILED",
+                                                    stream_id,
+                                                    {
+                                                        "client_id": client_id,
+                                                        "error": f"No data received for {chunk_timeout}s",
+                                                        "error_type": "chunk_timeout",
+                                                        "reason": reason,
+                                                        "retry_count": retry_count,
+                                                        "no_failover": not has_failover,
+                                                    },
+                                                )
+                                                # Terminate streaming — break to
+                                                # post-loop cleanup so subscribers
+                                                # are signaled and client is cleaned up.
                                                 break
-                                    else:
-                                        if silence_count > 0:
-                                            logger.info(
-                                                f"Audio recovered for stream {stream_id}, "
-                                                f"resetting silence counter"
-                                            )
-                                        silence_count = 0
 
-                        # Update idle tracking every chunk (important for idle detection accuracy)
-                        # This ensures we accurately detect when data is flowing vs stuck
-                        if client_id in self.clients:
-                            self.clients[client_id].last_data_time = datetime.now(
-                                timezone.utc
-                            )
+                                else:
+                                    chunk = await stream_iterator.__anext__()
+                            except StopAsyncIteration:
+                                break
+                            # Update last chunk time
+                            last_chunk_time = asyncio.get_event_loop().time()
 
-                        # Update stats periodically (every 10 chunks = ~320KB)
-                        if chunk_count % 10 == 0:
-                            # Calculate delta since last update
-                            bytes_delta = bytes_served - last_stats_update
-
-                            if client_id in self.clients:
-                                self.clients[client_id].last_access = datetime.now(
-                                    timezone.utc
-                                )
-                                self.clients[client_id].bytes_served += bytes_delta
-                            if stream_id in self.streams:
-                                self.streams[stream_id].last_access = datetime.now(
-                                    timezone.utc
-                                )
-                                self.streams[
-                                    stream_id
-                                ].total_bytes_served += bytes_delta
-                            self._stats.total_bytes_served += bytes_delta
-
-                            # Update last stats checkpoint
-                            last_stats_update = bytes_served
-
-                        # Update stats (lightweight) - log more frequently to debug
-                        if chunk_count == 1:
-                            logger.info(
-                                f"First chunk delivered to client {client_id}: {len(chunk)} bytes"
-                            )
-                        elif chunk_count <= 10:
-                            logger.info(
-                                f"Chunk {chunk_count} delivered to client {client_id}: {len(chunk)} bytes"
-                            )
-                        elif chunk_count % 100 == 0:
-                            logger.info(
-                                f"Client {client_id}: {chunk_count} chunks, {bytes_served:,} bytes served"
-                            )
-
-                    # If streaming was cancelled externally, skip failover and
-                    # go straight to post-loop cleanup so subscribers are
-                    # signaled and the client is cleaned up promptly.
-                    if cancel_event.is_set():
-                        break
-
-                    # Check circuit breaker after loop exits (if strict mode enabled)
-                    # Skip for VOD/timeshift since failover doesn't make sense for provider-specific content
-                    if (
-                        strict_mode_enabled
-                        and circuit_breaker_timeout > 0
-                        and not stream_info.is_vod
-                    ):
-                        time_since_last_chunk = (
-                            asyncio.get_event_loop().time() - last_chunk_time
-                        )
-                        if time_since_last_chunk > circuit_breaker_timeout:
-                            logger.error(
-                                f"STRICT MODE: Circuit breaker triggered - no data for {time_since_last_chunk:.1f}s (threshold: {circuit_breaker_timeout}s)"
-                            )
-                            # Mark upstream as bad
-                            cooldown_seconds = (
-                                settings.STRICT_LIVE_TS_CIRCUIT_BREAKER_COOLDOWN
-                            )
-                            stream_info.upstream_marked_bad_until = datetime.now(
-                                timezone.utc
-                            ) + timedelta(seconds=cooldown_seconds)
-                            logger.warning(
-                                f"STRICT MODE: Marking upstream as bad for {cooldown_seconds}s until {stream_info.upstream_marked_bad_until}"
-                            )
-
-                            # Try failover if available (check both resolver URL and static list)
-                            has_failover = bool(
-                                stream_info.failover_resolver_url
-                                or stream_info.failover_urls
-                            )
-                            if has_failover and failover_count < max_failovers:
+                            # Check if streaming should be cancelled
+                            if cancel_event.is_set():
                                 logger.info(
-                                    "STRICT MODE: Attempting failover due to circuit breaker"
+                                    f"Streaming cancelled for client {client_id} by external request"
                                 )
-                                await self._try_update_failover_url(
-                                    stream_id, "circuit_breaker_timeout"
+                                break
+
+                            # Check for failover event
+                            if stream_info.failover_event.is_set():
+                                stream_info.failover_event.clear()  # Clear immediately to prevent infinite loop
+                                logger.info(
+                                    f"Failover detected for stream {stream_id}, reconnecting client {client_id}"
                                 )
-                                failover_count += 1
+                                # Reset per-client monitoring state for new connection
+                                if settings.ENABLE_SILENCE_DETECTION:
+                                    silence_audio_buffer = b""
+                                    silence_monitoring_started = False
+                                    silence_check_start_time = None
+                                    silence_count = 0
+                                if settings.ENABLE_BITRATE_MONITORING:
+                                    bitrate_monitoring_started = False
+                                    bitrate_check_start_time = None
+                                    bitrate_bytes_window = 0
+                                    low_bitrate_count = 0
                                 # Close current connection
                                 if stream_context is not None:
                                     try:
@@ -2031,449 +1738,418 @@ class StreamManager:
                                         pass
                                 stream_context = None
                                 response = None
-                                continue  # Retry with failover URL
-
-                    # If we reach here, the upstream response iterator ended without error.
-                    # For live continuous streams, this is unexpected — it likely means the
-                    # provider silently closed the connection (e.g., connection limit reached).
-                    # Treat this as a failure and attempt failover if available.
-                    if (
-                        stream_info.is_live_continuous
-                        and not stream_info.failover_event.is_set()
-                    ):
-                        has_failover = bool(
-                            stream_info.failover_resolver_url
-                            or stream_info.failover_urls
-                        )
-                        if has_failover and failover_count < max_failovers:
-                            logger.warning(
-                                f"Live stream ended unexpectedly for client {client_id} "
-                                f"({chunk_count} chunks, {bytes_served} bytes) — "
-                                f"provider may have closed connection. "
-                                f"Attempting failover (attempt {failover_count + 1}/{max_failovers})"
-                            )
-                            await self._try_update_failover_url(
-                                stream_id, "live_stream_silent_close"
-                            )
-
-                            # Reset circuit breaker state for the old upstream
-                            stream_info.upstream_marked_bad_until = None
-
-                            # Clean up current connection before failover
-                            if stream_context is not None:
-                                try:
-                                    await stream_context.__aexit__(None, None, None)
-                                except Exception:
-                                    pass
-                            stream_context = None
-                            response = None
-                            failover_count += 1
-                            continue  # Retry with failover URL
-
-                    # Stream completed normally (VOD, or live with no failover available)
-                    if not stream_info.failover_event.is_set():
-                        logger.info(
-                            f"Stream completed for client {client_id}: {chunk_count} chunks, {bytes_served} bytes"
-                        )
-                        # For VOD, mark as naturally completed so we skip immediate client removal.
-                        # The client may issue more Range requests (seek probes, actual seeks, etc.)
-                        # and should remain registered until a real disconnect or periodic cleanup.
-                        # STREAM_STOPPED is NOT emitted here for VOD — cleanup_client already
-                        # emits it when the last client truly disconnects (lines 558–572), which
-                        # correctly handles seeking and resume-from-position scenarios.
-                        if stream_info.is_vod:
-                            natural_vod_completion = True
-                        else:
-                            # For live/continuous streams, natural completion means the upstream
-                            # ended — emit STREAM_STOPPED now.
-                            if not stream_info.stream_stopped_emitted:
-                                stream_info.stream_stopped_emitted = True
-                                await self._emit_event(
-                                    "STREAM_STOPPED",
-                                    stream_id,
-                                    {
-                                        "client_id": client_id,
-                                        "bytes_served": bytes_served,
-                                        "chunks_served": chunk_count,
-                                        "metadata": stream_info.metadata,
-                                    },
-                                )
-                        break  # Exit the failover loop
-                    # else: failover event was set, continue to next iteration
-
-                except GeneratorExit:
-                    # Client disconnected — Starlette throws GeneratorExit into the
-                    # async generator when the HTTP connection closes.  Without this
-                    # handler, GeneratorExit (a BaseException) propagates through the
-                    # inner finally and out of the while loop, so the post-loop
-                    # cleanup code (_signal_subscribers_end, cleanup_client) NEVER
-                    # executes.  This leaves subscribers stuck waiting for a sentinel
-                    # that never arrives and stale broadcast state that blocks
-                    # reconnection.
-                    logger.info(
-                        f"Client {client_id} disconnected (GeneratorExit), "
-                        f"signaling subscribers and cleaning up "
-                        f"(bytes_served: {bytes_served})"
-                    )
-                    # Signal subscribers so they can promote to primary
-                    self._signal_subscribers_end(stream_id)
-                    # Update final stats
-                    bytes_remaining = bytes_served - last_stats_update
-                    if bytes_remaining > 0:
-                        if client_id in self.clients:
-                            self.clients[client_id].bytes_served += bytes_remaining
-                            self.clients[client_id].last_access = datetime.now(
-                                timezone.utc
-                            )
-                        if stream_id in self.streams:
-                            self.streams[
-                                stream_id
-                            ].total_bytes_served += bytes_remaining
-                            self.streams[stream_id].last_access = datetime.now(
-                                timezone.utc
-                            )
-                        self._stats.total_bytes_served += bytes_remaining
-                    await self._emit_event(
-                        "CLIENT_DISCONNECTED",
-                        stream_id,
-                        {
-                            "client_id": client_id,
-                            "bytes_served": bytes_served,
-                            "chunks_served": chunk_count,
-                            "reason": "client_disconnected",
-                        },
-                    )
-                    await self.cleanup_client(client_id, connection_id)
-                    return  # Exit the generator cleanly
-
-                except httpx.ReadError as e:
-                    # ReadError often means client disconnected or provider closed connection
-                    # This is especially common with Range requests on live streams
-                    # MUST be caught before NetworkError since ReadError is a subclass
-                    error_str = str(e) if str(e) else "<empty ReadError>"
-                    logger.info(
-                        f"ReadError for client {client_id}: {error_str} (bytes_served: {bytes_served}, chunk_count: {chunk_count})"
-                    )
-
-                    if bytes_served == 0:
-                        # No data was sent - check if we can retry before failover
-                        elapsed_total = (
-                            asyncio.get_event_loop().time() - total_timeout_start
-                        )
-                        total_timeout_exceeded = (
-                            total_timeout > 0 and elapsed_total > total_timeout
-                        )
-
-                        # Try retrying the current URL first
-                        allow_initial_retry = (
-                            not stream_info.is_vod
-                        ) or bytes_served == 0
-                        if (
-                            retry_count < max_retries
-                            and not total_timeout_exceeded
-                            and allow_initial_retry
-                        ):
-                            retry_count += 1
-                            current_delay = (
-                                retry_delay * (1.5 ** (retry_count - 1))
-                                if settings.STREAM_RETRY_EXPONENTIAL_BACKOFF
-                                else retry_delay
-                            )
-                            logger.info(
-                                f"Retrying connection after ReadError for stream {stream_id}, client {client_id} "
-                                f"(attempt {retry_count}/{max_retries}, delay: {current_delay}s)"
-                            )
-
-                            # Clean up current connection
-                            if stream_context is not None:
-                                try:
-                                    await stream_context.__aexit__(None, None, None)
-                                except Exception:
-                                    pass
-                            stream_context = None
-                            response = None
-
-                            # Wait before retrying (cancel-aware)
-                            try:
-                                await asyncio.wait_for(
-                                    cancel_event.wait(), timeout=current_delay
-                                )
-                                # cancel_event fired — exit immediately
+                                failover_count += 1
+                                # Break inner loop to reconnect with new URL
                                 break
-                            except asyncio.TimeoutError:
-                                pass
 
-                            continue  # Retry with same URL
+                            yield chunk
+                            self._broadcast_chunk_to_subscribers(stream_id, chunk)
+                            bytes_served += len(chunk)
+                            chunk_count += 1
 
-                        # Retries exhausted, try failover if available
-                        has_failover = bool(
-                            stream_info.failover_resolver_url
-                            or stream_info.failover_urls
-                        )
-                        if _recover_sticky_origin_if_needed():
-                            logger.info(
-                                f"Retrying stream {stream_id} after sticky origin recovery"
+                            # Bitrate monitoring - detect degraded streams
+                            # State is per-client (local vars) to avoid corruption when
+                            # multiple clients share the same StreamInfo.
+                            if settings.ENABLE_BITRATE_MONITORING and stream_info:
+                                current_time = asyncio.get_event_loop().time()
+
+                                # Grace period - don't monitor during initial buffering
+                                if not bitrate_monitoring_started:
+                                    if bitrate_check_start_time is None:
+                                        bitrate_check_start_time = current_time
+                                    elif (
+                                        current_time - bitrate_check_start_time
+                                        >= settings.BITRATE_MONITORING_GRACE_PERIOD
+                                    ):
+                                        # Grace period over, start real monitoring
+                                        bitrate_monitoring_started = True
+                                        bitrate_check_start_time = current_time
+                                        bitrate_bytes_window = 0
+                                else:
+                                    # Add bytes to current window
+                                    bitrate_bytes_window += len(chunk)
+
+                                    # Check if interval elapsed
+                                    elapsed = current_time - (
+                                        bitrate_check_start_time or current_time
+                                    )
+                                    if elapsed >= settings.BITRATE_CHECK_INTERVAL:
+                                        # Calculate bitrate in bytes/second
+                                        bitrate = (
+                                            bitrate_bytes_window / elapsed
+                                            if elapsed > 0
+                                            else 0
+                                        )
+
+                                        if bitrate < settings.MIN_BITRATE_THRESHOLD:
+                                            low_bitrate_count += 1
+                                            logger.warning(
+                                                f"Low bitrate detected for stream {stream_id}: "
+                                                f"{bitrate:.0f} B/s ({bitrate * 8 / 1000:.0f} Kbps), "
+                                                f"threshold: {settings.MIN_BITRATE_THRESHOLD * 8 / 1000:.0f} Kbps, "
+                                                f"count: {low_bitrate_count}/{settings.BITRATE_FAILOVER_THRESHOLD}"
+                                            )
+
+                                            # Trigger failover if threshold exceeded
+                                            # Skip failover for VOD/timeshift since it's provider-specific
+                                            if (
+                                                low_bitrate_count
+                                                >= settings.BITRATE_FAILOVER_THRESHOLD
+                                            ):
+                                                has_failover = bool(
+                                                    stream_info.failover_resolver_url
+                                                    or stream_info.failover_urls
+                                                )
+                                                if (
+                                                    has_failover
+                                                    and failover_count < max_failovers
+                                                    and not stream_info.is_vod
+                                                ):
+                                                    logger.error(
+                                                        f"Bitrate consistently below threshold for stream {stream_id}, "
+                                                        f"triggering failover (attempt {failover_count + 1}/{max_failovers})"
+                                                    )
+                                                    await self._try_update_failover_url(
+                                                        stream_id, "low_bitrate"
+                                                    )
+                                                    # Reset bitrate monitoring for new connection
+                                                    low_bitrate_count = 0
+                                                    bitrate_monitoring_started = False
+                                                    bitrate_check_start_time = None
+                                                    bitrate_bytes_window = 0
+                                                    failover_count += 1
+                                                    # Close current connection
+                                                    if stream_context is not None:
+                                                        try:
+                                                            await stream_context.__aexit__(
+                                                                None, None, None
+                                                            )
+                                                        except Exception:
+                                                            pass
+                                                    stream_context = None
+                                                    response = None
+                                                    break  # Reconnect with new URL
+                                        else:
+                                            # Good bitrate - reset counter
+                                            if low_bitrate_count > 0:
+                                                logger.info(
+                                                    f"Bitrate recovered for stream {stream_id}: "
+                                                    f"{bitrate * 8 / 1000:.0f} Kbps, resetting low bitrate counter"
+                                                )
+                                            low_bitrate_count = 0
+
+                                        # Reset window for next interval
+                                        bitrate_check_start_time = current_time
+                                        bitrate_bytes_window = 0
+
+                            # Silence detection - detect silent audio streams
+                            # Per-stream setting takes precedence over global ENV var
+                            # State is per-client (local vars) to avoid corruption when
+                            # multiple clients share the same StreamInfo.
+                            silence_enabled = (
+                                stream_info.enable_silence_detection
+                                if stream_info.enable_silence_detection is not None
+                                else settings.ENABLE_SILENCE_DETECTION
                             )
-                            retry_count = 0
-                            continue
+                            if (
+                                silence_enabled
+                                and stream_info
+                                and not stream_info.is_vod
+                            ):
+                                current_time = asyncio.get_event_loop().time()
+                                eff_grace = (
+                                    stream_info.silence_monitoring_grace_period
+                                    if stream_info.silence_monitoring_grace_period
+                                    is not None
+                                    else settings.SILENCE_MONITORING_GRACE_PERIOD
+                                )
+                                eff_interval = (
+                                    stream_info.silence_check_interval
+                                    if stream_info.silence_check_interval is not None
+                                    else settings.SILENCE_CHECK_INTERVAL
+                                )
+                                eff_threshold = (
+                                    stream_info.silence_failover_threshold
+                                    if stream_info.silence_failover_threshold
+                                    is not None
+                                    else settings.SILENCE_FAILOVER_THRESHOLD
+                                )
 
+                                if not silence_monitoring_started:
+                                    if silence_check_start_time is None:
+                                        silence_check_start_time = current_time
+                                    elif (
+                                        current_time - silence_check_start_time
+                                        >= eff_grace
+                                    ):
+                                        silence_monitoring_started = True
+                                        silence_check_start_time = current_time
+                                        silence_audio_buffer = b""
+                                else:
+                                    # Cap buffer at 5MB to bound memory usage on high-bitrate streams
+                                    if len(silence_audio_buffer) < 5 * 1024 * 1024:
+                                        silence_audio_buffer += chunk
+
+                                    elapsed = current_time - (
+                                        silence_check_start_time or current_time
+                                    )
+                                    if elapsed >= eff_interval:
+                                        audio_buffer = silence_audio_buffer
+                                        silence_audio_buffer = b""
+                                        silence_check_start_time = current_time
+
+                                        is_silent = await self._analyze_audio_silence(
+                                            audio_buffer,
+                                            stream_id,
+                                            threshold_db=stream_info.silence_threshold_db,
+                                            duration=stream_info.silence_duration,
+                                        )
+
+                                        if is_silent:
+                                            silence_count += 1
+                                            logger.warning(
+                                                f"Silence detected for stream {stream_id}, "
+                                                f"count: {silence_count}/{eff_threshold}"
+                                            )
+
+                                            if silence_count >= eff_threshold:
+                                                has_failover = bool(
+                                                    stream_info.failover_resolver_url
+                                                    or stream_info.failover_urls
+                                                )
+                                                if (
+                                                    has_failover
+                                                    and failover_count < max_failovers
+                                                ):
+                                                    logger.error(
+                                                        f"Persistent silence detected for stream {stream_id}, "
+                                                        f"triggering failover (attempt {failover_count + 1}/{max_failovers})"
+                                                    )
+                                                    await self._try_update_failover_url(
+                                                        stream_id, "silence_detected"
+                                                    )
+                                                    silence_count = 0
+                                                    silence_monitoring_started = False
+                                                    silence_check_start_time = None
+                                                    silence_audio_buffer = b""
+                                                    failover_count += 1
+                                                    if stream_context is not None:
+                                                        try:
+                                                            await stream_context.__aexit__(
+                                                                None, None, None
+                                                            )
+                                                        except Exception:
+                                                            pass
+                                                    stream_context = None
+                                                    response = None
+                                                    break
+                                        else:
+                                            if silence_count > 0:
+                                                logger.info(
+                                                    f"Audio recovered for stream {stream_id}, "
+                                                    f"resetting silence counter"
+                                                )
+                                            silence_count = 0
+
+                            # Update idle tracking every chunk (important for idle detection accuracy)
+                            # This ensures we accurately detect when data is flowing vs stuck
+                            if client_id in self.clients:
+                                self.clients[client_id].last_data_time = datetime.now(
+                                    timezone.utc
+                                )
+
+                            # Update stats periodically (every 10 chunks = ~320KB)
+                            if chunk_count % 10 == 0:
+                                # Calculate delta since last update
+                                bytes_delta = bytes_served - last_stats_update
+
+                                if client_id in self.clients:
+                                    self.clients[client_id].last_access = datetime.now(
+                                        timezone.utc
+                                    )
+                                    self.clients[client_id].bytes_served += bytes_delta
+                                if stream_id in self.streams:
+                                    self.streams[stream_id].last_access = datetime.now(
+                                        timezone.utc
+                                    )
+                                    self.streams[
+                                        stream_id
+                                    ].total_bytes_served += bytes_delta
+                                self._stats.total_bytes_served += bytes_delta
+
+                                # Update last stats checkpoint
+                                last_stats_update = bytes_served
+
+                            # Update stats (lightweight) - log more frequently to debug
+                            if chunk_count == 1:
+                                logger.info(
+                                    f"First chunk delivered to client {client_id}: {len(chunk)} bytes"
+                                )
+                            elif chunk_count <= 10:
+                                logger.info(
+                                    f"Chunk {chunk_count} delivered to client {client_id}: {len(chunk)} bytes"
+                                )
+                            elif chunk_count % 100 == 0:
+                                logger.info(
+                                    f"Client {client_id}: {chunk_count} chunks, {bytes_served:,} bytes served"
+                                )
+
+                        # If streaming was cancelled externally, skip failover and
+                        # go straight to post-loop cleanup so subscribers are
+                        # signaled and the client is cleaned up promptly.
+                        if cancel_event.is_set():
+                            break
+
+                        # Check circuit breaker after loop exits (if strict mode enabled)
+                        # Skip for VOD/timeshift since failover doesn't make sense for provider-specific content
                         if (
-                            has_failover
-                            and failover_count < max_failovers
+                            strict_mode_enabled
+                            and circuit_breaker_timeout > 0
                             and not stream_info.is_vod
                         ):
-                            logger.info(
-                                f"Retries exhausted, attempting automatic failover for client {client_id} (ReadError, no data)"
+                            time_since_last_chunk = (
+                                asyncio.get_event_loop().time() - last_chunk_time
                             )
-                            failover_ok = await self._try_update_failover_url(
-                                stream_id, "connection_error_after_retries"
-                            )
-                            failover_count += 1
-                            if not failover_ok:
-                                logger.warning(
-                                    f"Failover failed for stream {stream_id}, giving up"
+                            if time_since_last_chunk > circuit_breaker_timeout:
+                                logger.error(
+                                    f"STRICT MODE: Circuit breaker triggered - no data for {time_since_last_chunk:.1f}s (threshold: {circuit_breaker_timeout}s)"
                                 )
-                                break
-                            # Reset retry counter for new URL
-                            retry_count = 0
-                            # Clean up current connection
-                            if stream_context is not None:
-                                try:
-                                    await stream_context.__aexit__(None, None, None)
-                                except Exception:
-                                    pass
-                            stream_context = None
-                            response = None
-                            continue  # Retry with failover URL
-                        else:
-                            # No retries or failover available, emit failure event
-                            reason = (
-                                "total_timeout_exceeded"
-                                if total_timeout_exceeded
-                                else "no_failover_available"
-                            )
-                            await self._emit_event(
-                                "STREAM_FAILED",
-                                stream_id,
-                                {
-                                    "client_id": client_id,
-                                    "error": error_str,
-                                    "error_type": "ReadError",
-                                    "reason": reason,
-                                    "retry_count": retry_count,
-                                    "no_failover": not has_failover,
-                                },
-                            )
-                            break
-                    else:
-                        # Some data was sent.
-                        # For VOD, upstream can drop mid-stream; reconnect using Range instead of treating as client disconnect.
-                        if stream_info.is_vod and vod_reconnects < max_vod_reconnects:
-                            vod_reconnects += 1
-                            resume_from_byte = range_start + bytes_served
-                            logger.warning(
-                                f"VOD upstream ReadError mid-stream; reconnecting from byte {resume_from_byte} "
-                                f"(attempt {vod_reconnects}/{max_vod_reconnects})"
-                            )
+                                # Mark upstream as bad
+                                cooldown_seconds = (
+                                    settings.STRICT_LIVE_TS_CIRCUIT_BREAKER_COOLDOWN
+                                )
+                                stream_info.upstream_marked_bad_until = datetime.now(
+                                    timezone.utc
+                                ) + timedelta(seconds=cooldown_seconds)
+                                logger.warning(
+                                    f"STRICT MODE: Marking upstream as bad for {cooldown_seconds}s until {stream_info.upstream_marked_bad_until}"
+                                )
 
-                            # Clean up current connection
-                            if stream_context is not None:
-                                try:
-                                    await stream_context.__aexit__(None, None, None)
-                                except Exception:
-                                    pass
-                            stream_context = None
-                            response = None
+                                # Try failover if available (check both resolver URL and static list)
+                                has_failover = bool(
+                                    stream_info.failover_resolver_url
+                                    or stream_info.failover_urls
+                                )
+                                if has_failover and failover_count < max_failovers:
+                                    logger.info(
+                                        "STRICT MODE: Attempting failover due to circuit breaker"
+                                    )
+                                    await self._try_update_failover_url(
+                                        stream_id, "circuit_breaker_timeout"
+                                    )
+                                    failover_count += 1
+                                    # Close current connection
+                                    if stream_context is not None:
+                                        try:
+                                            await stream_context.__aexit__(
+                                                None, None, None
+                                            )
+                                        except Exception:
+                                            pass
+                                    stream_context = None
+                                    response = None
+                                    continue  # Retry with failover URL
 
-                            continue  # Reconnect outer loop with Range bytes=resume_from_byte-
-                        else:
-                            # Non-VOD or retries exhausted -> treat as client disconnect
-                            logger.info(
-                                f"Client {client_id} likely disconnected during streaming"
-                            )
-                            await self._emit_event(
-                                "CLIENT_DISCONNECTED",
-                                stream_id,
-                                {
-                                    "client_id": client_id,
-                                    "bytes_served": bytes_served,
-                                    "chunks_served": chunk_count,
-                                    "reason": "read_error_during_stream",
-                                },
-                            )
-                            break
-
-                except (
-                    httpx.TimeoutException,
-                    httpx.NetworkError,
-                    httpx.HTTPError,
-                ) as e:
-                    logger.warning(
-                        f"Stream error for client {client_id}: {type(e).__name__}: {e}"
-                    )
-
-                    # Capture HTTP status code for failover resolver context
-                    if isinstance(e, httpx.HTTPStatusError):
-                        stream_info.last_error_status_code = e.response.status_code
-
-                    # Check if we can retry before failover
-                    elapsed_total = (
-                        asyncio.get_event_loop().time() - total_timeout_start
-                    )
-                    total_timeout_exceeded = (
-                        total_timeout > 0 and elapsed_total > total_timeout
-                    )
-
-                    # Try retrying the current URL first
-                    allow_initial_retry = (not stream_info.is_vod) or bytes_served == 0
-                    if (
-                        retry_count < max_retries
-                        and not total_timeout_exceeded
-                        and allow_initial_retry
-                    ):
-                        retry_count += 1
-                        current_delay = (
-                            retry_delay * (1.5 ** (retry_count - 1))
-                            if settings.STREAM_RETRY_EXPONENTIAL_BACKOFF
-                            else retry_delay
-                        )
-                        logger.info(
-                            f"Retrying connection after {type(e).__name__} for stream {stream_id}, client {client_id} "
-                            f"(attempt {retry_count}/{max_retries}, delay: {current_delay}s)"
-                        )
-
-                        # Clean up current connection
-                        if stream_context is not None:
-                            try:
-                                await stream_context.__aexit__(None, None, None)
-                            except Exception:
-                                pass
-                        stream_context = None
-                        response = None
-
-                        # Wait before retrying (cancel-aware)
-                        try:
-                            await asyncio.wait_for(
-                                cancel_event.wait(), timeout=current_delay
-                            )
-                            # cancel_event fired — exit immediately
-                            break
-                        except asyncio.TimeoutError:
-                            pass
-
-                        continue  # Retry with same URL
-
-                    # Retries exhausted, try automatic failover
-                    has_failover = bool(
-                        stream_info.failover_resolver_url or stream_info.failover_urls
-                    )
-                    if _recover_sticky_origin_if_needed():
-                        logger.info(
-                            f"Retrying stream {stream_id} after sticky origin recovery"
-                        )
-                        retry_count = 0
-                        continue
-
-                    if (
-                        has_failover
-                        and failover_count < max_failovers
-                        and not stream_info.is_vod
-                    ):
-                        logger.info(
-                            f"Retries exhausted, attempting automatic failover for client {client_id} "
-                            f"(failover attempt {failover_count + 1}/{max_failovers})"
-                        )
-                        failover_ok = await self._try_update_failover_url(
-                            stream_id, f"stream_error_{type(e).__name__}_after_retries"
-                        )
-                        failover_count += 1
-                        if not failover_ok:
-                            logger.warning(
-                                f"Failover failed for stream {stream_id}, giving up"
-                            )
-                            break
-                        # Reset retry counter for new URL
-                        retry_count = 0
-                        # Clean up current connection
-                        if stream_context is not None:
-                            try:
-                                await stream_context.__aexit__(None, None, None)
-                            except Exception:
-                                pass
-                        stream_context = None
-                        response = None
-                        continue  # Retry with failover URL
-                    else:
-                        # For VOD, reconnect mid-stream instead of failing the client
+                        # If we reach here, the upstream response iterator ended without error.
+                        # For live continuous streams, this is unexpected — it likely means the
+                        # provider silently closed the connection (e.g., connection limit reached).
+                        # Treat this as a failure and attempt failover if available.
                         if (
-                            stream_info.is_vod
-                            and bytes_served > 0
-                            and vod_reconnects < max_vod_reconnects
+                            stream_info.is_live_continuous
+                            and not stream_info.failover_event.is_set()
                         ):
-                            vod_reconnects += 1
-                            resume_from_byte = range_start + bytes_served
-                            logger.warning(
-                                f"VOD upstream error {type(e).__name__} mid-stream; reconnecting from byte {resume_from_byte} "
-                                f"(attempt {vod_reconnects}/{max_vod_reconnects})"
+                            has_failover = bool(
+                                stream_info.failover_resolver_url
+                                or stream_info.failover_urls
                             )
-                            if stream_context is not None:
-                                try:
-                                    await stream_context.__aexit__(None, None, None)
-                                except Exception:
-                                    pass
-                            stream_context = None
-                            response = None
-                            continue
+                            if has_failover and failover_count < max_failovers:
+                                logger.warning(
+                                    f"Live stream ended unexpectedly for client {client_id} "
+                                    f"({chunk_count} chunks, {bytes_served} bytes) — "
+                                    f"provider may have closed connection. "
+                                    f"Attempting failover (attempt {failover_count + 1}/{max_failovers})"
+                                )
+                                await self._try_update_failover_url(
+                                    stream_id, "live_stream_silent_close"
+                                )
 
-                        reason = (
-                            "total_timeout_exceeded"
-                            if total_timeout_exceeded
-                            else "no_failover_available"
-                        )
-                        await self._emit_event(
-                            "STREAM_FAILED",
-                            stream_id,
-                            {
-                                "client_id": client_id,
-                                "error": str(e),
-                                "error_type": type(e).__name__,
-                                "reason": reason,
-                                "retry_count": retry_count,
-                                "no_failover": not has_failover,
-                            },
-                        )
-                        break
+                                # Reset circuit breaker state for the old upstream
+                                stream_info.upstream_marked_bad_until = None
 
-                except (ConnectionResetError, ConnectionError, BrokenPipeError) as e:
-                    # Client disconnected - this is normal, not an error
-                    logger.info(f"Client {client_id} disconnected: {type(e).__name__}")
-                    await self._emit_event(
-                        "CLIENT_DISCONNECTED",
-                        stream_id,
-                        {
-                            "client_id": client_id,
-                            "bytes_served": bytes_served,
-                            "chunks_served": chunk_count,
-                            "reason": "client_disconnected",
-                        },
-                    )
-                    break
+                                # Clean up current connection before failover
+                                if stream_context is not None:
+                                    try:
+                                        await stream_context.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                stream_context = None
+                                response = None
+                                failover_count += 1
+                                continue  # Retry with failover URL
 
-                except Exception as e:
-                    # Log with more detail for debugging
-                    error_str = str(e) if str(e) else f"<empty {type(e).__name__}>"
-                    logger.warning(
-                        f"Stream error for client {client_id}: {type(e).__name__}: {error_str}"
-                    )
-                    logger.warning(
-                        f"Exception details - bytes_served: {bytes_served}, chunks: {chunk_count}"
-                    )
+                        # Stream completed normally (VOD, or live with no failover available)
+                        if not stream_info.failover_event.is_set():
+                            logger.info(
+                                f"Stream completed for client {client_id}: {chunk_count} chunks, {bytes_served} bytes"
+                            )
+                            # For VOD, mark as naturally completed so we skip immediate client removal.
+                            # The client may issue more Range requests (seek probes, actual seeks, etc.)
+                            # and should remain registered until a real disconnect or periodic cleanup.
+                            # STREAM_STOPPED is NOT emitted here for VOD — cleanup_client already
+                            # emits it when the last client truly disconnects (lines 558–572), which
+                            # correctly handles seeking and resume-from-position scenarios.
+                            if stream_info.is_vod:
+                                natural_vod_completion = True
+                            else:
+                                # For live/continuous streams, natural completion means the upstream
+                                # ended — emit STREAM_STOPPED now.
+                                if not stream_info.stream_stopped_emitted:
+                                    stream_info.stream_stopped_emitted = True
+                                    await self._emit_event(
+                                        "STREAM_STOPPED",
+                                        stream_id,
+                                        {
+                                            "client_id": client_id,
+                                            "bytes_served": bytes_served,
+                                            "chunks_served": chunk_count,
+                                            "metadata": stream_info.metadata,
+                                        },
+                                    )
+                            break  # Exit the failover loop
+                        # else: failover event was set, continue to next iteration
 
-                    # Check if this looks like a client disconnection (empty error message often indicates this)
-                    if not str(e) and bytes_served > 0:
+                    except GeneratorExit:
+                        # Client disconnected — Starlette throws GeneratorExit into the
+                        # async generator when the HTTP connection closes.  Without this
+                        # handler, GeneratorExit (a BaseException) propagates through the
+                        # inner finally and out of the while loop, so the post-loop
+                        # cleanup code (_signal_subscribers_end, cleanup_client) NEVER
+                        # executes.  This leaves subscribers stuck waiting for a sentinel
+                        # that never arrives and stale broadcast state that blocks
+                        # reconnection.
                         logger.info(
-                            f"Likely client disconnection for {client_id} (empty error message, data was streaming)"
+                            f"Client {client_id} disconnected (GeneratorExit), "
+                            f"signaling subscribers and cleaning up "
+                            f"(bytes_served: {bytes_served})"
                         )
+                        # Signal subscribers so they can promote to primary
+                        self._signal_subscribers_end(stream_id)
+                        # Update final stats
+                        bytes_remaining = bytes_served - last_stats_update
+                        if bytes_remaining > 0:
+                            if client_id in self.clients:
+                                self.clients[client_id].bytes_served += bytes_remaining
+                                self.clients[client_id].last_access = datetime.now(
+                                    timezone.utc
+                                )
+                            if stream_id in self.streams:
+                                self.streams[
+                                    stream_id
+                                ].total_bytes_served += bytes_remaining
+                                self.streams[stream_id].last_access = datetime.now(
+                                    timezone.utc
+                                )
+                            self._stats.total_bytes_served += bytes_remaining
                         await self._emit_event(
                             "CLIENT_DISCONNECTED",
                             stream_id,
@@ -2481,11 +2157,185 @@ class StreamManager:
                                 "client_id": client_id,
                                 "bytes_served": bytes_served,
                                 "chunks_served": chunk_count,
-                                "reason": "possible_client_disconnection",
+                                "reason": "client_disconnected",
                             },
                         )
-                        break
-                    else:
+                        await self.cleanup_client(client_id, connection_id)
+                        return  # Exit the generator cleanly
+
+                    except httpx.ReadError as e:
+                        # ReadError often means client disconnected or provider closed connection
+                        # This is especially common with Range requests on live streams
+                        # MUST be caught before NetworkError since ReadError is a subclass
+                        error_str = str(e) if str(e) else "<empty ReadError>"
+                        logger.info(
+                            f"ReadError for client {client_id}: {error_str} (bytes_served: {bytes_served}, chunk_count: {chunk_count})"
+                        )
+
+                        if bytes_served == 0:
+                            # No data was sent - check if we can retry before failover
+                            elapsed_total = (
+                                asyncio.get_event_loop().time() - total_timeout_start
+                            )
+                            total_timeout_exceeded = (
+                                total_timeout > 0 and elapsed_total > total_timeout
+                            )
+
+                            # Try retrying the current URL first
+                            allow_initial_retry = (
+                                not stream_info.is_vod
+                            ) or bytes_served == 0
+                            if (
+                                retry_count < max_retries
+                                and not total_timeout_exceeded
+                                and allow_initial_retry
+                            ):
+                                retry_count += 1
+                                current_delay = (
+                                    retry_delay * (1.5 ** (retry_count - 1))
+                                    if settings.STREAM_RETRY_EXPONENTIAL_BACKOFF
+                                    else retry_delay
+                                )
+                                logger.info(
+                                    f"Retrying connection after ReadError for stream {stream_id}, client {client_id} "
+                                    f"(attempt {retry_count}/{max_retries}, delay: {current_delay}s)"
+                                )
+
+                                # Clean up current connection
+                                if stream_context is not None:
+                                    try:
+                                        await stream_context.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                stream_context = None
+                                response = None
+
+                                # Wait before retrying (cancel-aware)
+                                try:
+                                    await asyncio.wait_for(
+                                        cancel_event.wait(), timeout=current_delay
+                                    )
+                                    # cancel_event fired — exit immediately
+                                    break
+                                except asyncio.TimeoutError:
+                                    pass
+
+                                continue  # Retry with same URL
+
+                            # Retries exhausted, try failover if available
+                            has_failover = bool(
+                                stream_info.failover_resolver_url
+                                or stream_info.failover_urls
+                            )
+                            if _recover_sticky_origin_if_needed():
+                                logger.info(
+                                    f"Retrying stream {stream_id} after sticky origin recovery"
+                                )
+                                retry_count = 0
+                                continue
+
+                            if (
+                                has_failover
+                                and failover_count < max_failovers
+                                and not stream_info.is_vod
+                            ):
+                                logger.info(
+                                    f"Retries exhausted, attempting automatic failover for client {client_id} (ReadError, no data)"
+                                )
+                                failover_ok = await self._try_update_failover_url(
+                                    stream_id, "connection_error_after_retries"
+                                )
+                                failover_count += 1
+                                if not failover_ok:
+                                    logger.warning(
+                                        f"Failover failed for stream {stream_id}, giving up"
+                                    )
+                                    break
+                                # Reset retry counter for new URL
+                                retry_count = 0
+                                # Clean up current connection
+                                if stream_context is not None:
+                                    try:
+                                        await stream_context.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                stream_context = None
+                                response = None
+                                continue  # Retry with failover URL
+                            else:
+                                # No retries or failover available, emit failure event
+                                reason = (
+                                    "total_timeout_exceeded"
+                                    if total_timeout_exceeded
+                                    else "no_failover_available"
+                                )
+                                await self._emit_event(
+                                    "STREAM_FAILED",
+                                    stream_id,
+                                    {
+                                        "client_id": client_id,
+                                        "error": error_str,
+                                        "error_type": "ReadError",
+                                        "reason": reason,
+                                        "retry_count": retry_count,
+                                        "no_failover": not has_failover,
+                                    },
+                                )
+                                break
+                        else:
+                            # Some data was sent.
+                            # For VOD, upstream can drop mid-stream; reconnect using Range instead of treating as client disconnect.
+                            if (
+                                stream_info.is_vod
+                                and vod_reconnects < max_vod_reconnects
+                            ):
+                                vod_reconnects += 1
+                                resume_from_byte = range_start + bytes_served
+                                logger.warning(
+                                    f"VOD upstream ReadError mid-stream; reconnecting from byte {resume_from_byte} "
+                                    f"(attempt {vod_reconnects}/{max_vod_reconnects})"
+                                )
+
+                                # Clean up current connection
+                                if stream_context is not None:
+                                    try:
+                                        await stream_context.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                stream_context = None
+                                response = None
+
+                                continue  # Reconnect outer loop with Range bytes=resume_from_byte-
+                            else:
+                                # Non-VOD or retries exhausted -> treat as client disconnect
+                                logger.info(
+                                    f"Client {client_id} likely disconnected during streaming"
+                                )
+                                await self._emit_event(
+                                    "CLIENT_DISCONNECTED",
+                                    stream_id,
+                                    {
+                                        "client_id": client_id,
+                                        "bytes_served": bytes_served,
+                                        "chunks_served": chunk_count,
+                                        "reason": "read_error_during_stream",
+                                    },
+                                )
+                                break
+
+                    except (
+                        httpx.TimeoutException,
+                        httpx.NetworkError,
+                        httpx.HTTPError,
+                    ) as e:
+                        logger.warning(
+                            f"Stream error for client {client_id}: {type(e).__name__}: {e}"
+                        )
+
+                        # Capture HTTP status code for failover resolver context
+                        if isinstance(e, httpx.HTTPStatusError):
+                            stream_info.last_error_status_code = e.response.status_code
+
                         # Check if we can retry before failover
                         elapsed_total = (
                             asyncio.get_event_loop().time() - total_timeout_start
@@ -2535,7 +2385,7 @@ class StreamManager:
 
                             continue  # Retry with same URL
 
-                        # Try failover for unknown errors too
+                        # Retries exhausted, try automatic failover
                         has_failover = bool(
                             stream_info.failover_resolver_url
                             or stream_info.failover_urls
@@ -2553,11 +2403,12 @@ class StreamManager:
                             and not stream_info.is_vod
                         ):
                             logger.info(
-                                f"Retries exhausted, attempting automatic failover for client {client_id} (unknown error)"
+                                f"Retries exhausted, attempting automatic failover for client {client_id} "
+                                f"(failover attempt {failover_count + 1}/{max_failovers})"
                             )
                             failover_ok = await self._try_update_failover_url(
                                 stream_id,
-                                f"unknown_error_{type(e).__name__}_after_retries",
+                                f"stream_error_{type(e).__name__}_after_retries",
                             )
                             failover_count += 1
                             if not failover_ok:
@@ -2577,6 +2428,27 @@ class StreamManager:
                             response = None
                             continue  # Retry with failover URL
                         else:
+                            # For VOD, reconnect mid-stream instead of failing the client
+                            if (
+                                stream_info.is_vod
+                                and bytes_served > 0
+                                and vod_reconnects < max_vod_reconnects
+                            ):
+                                vod_reconnects += 1
+                                resume_from_byte = range_start + bytes_served
+                                logger.warning(
+                                    f"VOD upstream error {type(e).__name__} mid-stream; reconnecting from byte {resume_from_byte} "
+                                    f"(attempt {vod_reconnects}/{max_vod_reconnects})"
+                                )
+                                if stream_context is not None:
+                                    try:
+                                        await stream_context.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                stream_context = None
+                                response = None
+                                continue
+
                             reason = (
                                 "total_timeout_exceeded"
                                 if total_timeout_exceeded
@@ -2587,98 +2459,264 @@ class StreamManager:
                                 stream_id,
                                 {
                                     "client_id": client_id,
-                                    "error": error_str,
+                                    "error": str(e),
                                     "error_type": type(e).__name__,
                                     "reason": reason,
                                     "retry_count": retry_count,
-                                    "bytes_served": bytes_served,
+                                    "no_failover": not has_failover,
                                 },
                             )
                             break
 
-                finally:
-                    # When the client disconnected (cancel_event set) and the
-                    # stream is live, hand off the upstream connection to the
-                    # promoted subscriber instead of closing it.  This avoids
-                    # opening a second connection (which could exceed provider
-                    # limits) and eliminates the ~250ms gap/skip.
-                    if (
-                        stream_context is not None
-                        and cancel_event.is_set()
-                        and not stream_info.is_vod
-                        and stream_id in self.stream_clients
-                        and len(self.stream_clients.get(stream_id, set()) - {client_id}) > 0
-                    ):
-                        self._handoff_upstream[stream_id] = (
-                            stream_context, response, stream_iterator
-                        )
+                    except (
+                        ConnectionResetError,
+                        ConnectionError,
+                        BrokenPipeError,
+                    ) as e:
+                        # Client disconnected - this is normal, not an error
                         logger.info(
-                            f"Upstream connection handed off for stream {stream_id} "
-                            f"(client {client_id} disconnected, subscriber will inherit)"
+                            f"Client {client_id} disconnected: {type(e).__name__}"
                         )
-                        # Auto-cleanup if nobody claims it within 5 seconds
-                        async def _cleanup_handoff(sid: str = stream_id) -> None:
-                            await asyncio.sleep(5)
-                            unclaimed = self._handoff_upstream.pop(sid, None)
-                            if unclaimed:
-                                ctx, _, _ = unclaimed
-                                try:
-                                    await ctx.__aexit__(None, None, None)
-                                except Exception:
-                                    pass
-                                logger.info(
-                                    f"Closed unclaimed handoff upstream for stream {sid}"
-                                )
-                        asyncio.ensure_future(_cleanup_handoff())
-                        # Prevent the outer finally from signaling again
-                        stream_context = None
-                    elif stream_context is not None:
-                        try:
-                            await stream_context.__aexit__(None, None, None)
+                        await self._emit_event(
+                            "CLIENT_DISCONNECTED",
+                            stream_id,
+                            {
+                                "client_id": client_id,
+                                "bytes_served": bytes_served,
+                                "chunks_served": chunk_count,
+                                "reason": "client_disconnected",
+                            },
+                        )
+                        break
+
+                    except Exception as e:
+                        # Log with more detail for debugging
+                        error_str = str(e) if str(e) else f"<empty {type(e).__name__}>"
+                        logger.warning(
+                            f"Stream error for client {client_id}: {type(e).__name__}: {error_str}"
+                        )
+                        logger.warning(
+                            f"Exception details - bytes_served: {bytes_served}, chunks: {chunk_count}"
+                        )
+
+                        # Check if this looks like a client disconnection (empty error message often indicates this)
+                        if not str(e) and bytes_served > 0:
                             logger.info(
-                                f"Provider connection closed for client {client_id}"
+                                f"Likely client disconnection for {client_id} (empty error message, data was streaming)"
                             )
-                        except Exception as close_error:
-                            logger.warning(f"Error closing response: {close_error}")
+                            await self._emit_event(
+                                "CLIENT_DISCONNECTED",
+                                stream_id,
+                                {
+                                    "client_id": client_id,
+                                    "bytes_served": bytes_served,
+                                    "chunks_served": chunk_count,
+                                    "reason": "possible_client_disconnection",
+                                },
+                            )
+                            break
+                        else:
+                            # Check if we can retry before failover
+                            elapsed_total = (
+                                asyncio.get_event_loop().time() - total_timeout_start
+                            )
+                            total_timeout_exceeded = (
+                                total_timeout > 0 and elapsed_total > total_timeout
+                            )
 
-              # Primary reader is exiting — signal all subscribers to stop.
-              # They will get a None sentinel and their media player will reconnect,
-              # at which point one of them will become the new primary.
-              self._signal_subscribers_end(stream_id)
+                            # Try retrying the current URL first
+                            allow_initial_retry = (
+                                not stream_info.is_vod
+                            ) or bytes_served == 0
+                            if (
+                                retry_count < max_retries
+                                and not total_timeout_exceeded
+                                and allow_initial_retry
+                            ):
+                                retry_count += 1
+                                current_delay = (
+                                    retry_delay * (1.5 ** (retry_count - 1))
+                                    if settings.STREAM_RETRY_EXPONENTIAL_BACKOFF
+                                    else retry_delay
+                                )
+                                logger.info(
+                                    f"Retrying connection after {type(e).__name__} for stream {stream_id}, client {client_id} "
+                                    f"(attempt {retry_count}/{max_retries}, delay: {current_delay}s)"
+                                )
 
-              # Update final stats (add any remaining bytes not yet counted)
-              bytes_remaining = bytes_served - last_stats_update
-              if bytes_remaining > 0:
-                  if client_id in self.clients:
-                      self.clients[client_id].bytes_served += bytes_remaining
-                      self.clients[client_id].last_access = datetime.now(timezone.utc)
+                                # Clean up current connection
+                                if stream_context is not None:
+                                    try:
+                                        await stream_context.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                stream_context = None
+                                response = None
 
-                  if stream_id in self.streams:
-                      self.streams[stream_id].total_bytes_served += bytes_remaining
-                      self.streams[stream_id].last_access = datetime.now(timezone.utc)
+                                # Wait before retrying (cancel-aware)
+                                try:
+                                    await asyncio.wait_for(
+                                        cancel_event.wait(), timeout=current_delay
+                                    )
+                                    # cancel_event fired — exit immediately
+                                    break
+                                except asyncio.TimeoutError:
+                                    pass
 
-                  self._stats.total_bytes_served += bytes_remaining
+                                continue  # Retry with same URL
 
-              # For VOD ranges that ended naturally (upstream finished serving bytes),
-              # keep the client registered so subsequent seek requests from the same
-              # client (Kodi file-size probe → actual seek → etc.) can reuse it without
-              # re-registration gaps.  The periodic cleanup will remove truly idle clients.
-              # For all other exits (client disconnect, error, cancel), do a full cleanup.
-              if natural_vod_completion:
-                  if connection_id in self.connection_cancel_events:
-                      del self.connection_cancel_events[connection_id]
-                  if (
-                      client_id in self.clients
-                      and self.clients[client_id].active_connection_id == connection_id
-                  ):
-                      self.clients[client_id].active_connection_id = None
-                  logger.info(
-                      f"VOD range served naturally for client {client_id} (connection {connection_id}), "
-                      f"client kept registered for potential seek requests"
-                  )
-              else:
-                  # Cleanup client - pass connection_id to prevent race conditions
-                  await self.cleanup_client(client_id, connection_id)
+                            # Try failover for unknown errors too
+                            has_failover = bool(
+                                stream_info.failover_resolver_url
+                                or stream_info.failover_urls
+                            )
+                            if _recover_sticky_origin_if_needed():
+                                logger.info(
+                                    f"Retrying stream {stream_id} after sticky origin recovery"
+                                )
+                                retry_count = 0
+                                continue
+
+                            if (
+                                has_failover
+                                and failover_count < max_failovers
+                                and not stream_info.is_vod
+                            ):
+                                logger.info(
+                                    f"Retries exhausted, attempting automatic failover for client {client_id} (unknown error)"
+                                )
+                                failover_ok = await self._try_update_failover_url(
+                                    stream_id,
+                                    f"unknown_error_{type(e).__name__}_after_retries",
+                                )
+                                failover_count += 1
+                                if not failover_ok:
+                                    logger.warning(
+                                        f"Failover failed for stream {stream_id}, giving up"
+                                    )
+                                    break
+                                # Reset retry counter for new URL
+                                retry_count = 0
+                                # Clean up current connection
+                                if stream_context is not None:
+                                    try:
+                                        await stream_context.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                stream_context = None
+                                response = None
+                                continue  # Retry with failover URL
+                            else:
+                                reason = (
+                                    "total_timeout_exceeded"
+                                    if total_timeout_exceeded
+                                    else "no_failover_available"
+                                )
+                                await self._emit_event(
+                                    "STREAM_FAILED",
+                                    stream_id,
+                                    {
+                                        "client_id": client_id,
+                                        "error": error_str,
+                                        "error_type": type(e).__name__,
+                                        "reason": reason,
+                                        "retry_count": retry_count,
+                                        "bytes_served": bytes_served,
+                                    },
+                                )
+                                break
+
+                    finally:
+                        # When the client disconnected (cancel_event set) and the
+                        # stream is live, hand off the upstream connection to the
+                        # promoted subscriber instead of closing it.  This avoids
+                        # opening a second connection (which could exceed provider
+                        # limits) and eliminates the ~250ms gap/skip.
+                        if (
+                            stream_context is not None
+                            and cancel_event.is_set()
+                            and not stream_info.is_vod
+                            and stream_id in self.stream_clients
+                            and len(
+                                self.stream_clients.get(stream_id, set()) - {client_id}
+                            )
+                            > 0
+                        ):
+                            self._handoff_upstream[stream_id] = (
+                                stream_context,
+                                response,
+                                stream_iterator,
+                            )
+                            logger.info(
+                                f"Upstream connection handed off for stream {stream_id} "
+                                f"(client {client_id} disconnected, subscriber will inherit)"
+                            )
+
+                            # Auto-cleanup if nobody claims it within 5 seconds
+                            async def _cleanup_handoff(sid: str = stream_id) -> None:
+                                await asyncio.sleep(5)
+                                unclaimed = self._handoff_upstream.pop(sid, None)
+                                if unclaimed:
+                                    ctx, _, _ = unclaimed
+                                    try:
+                                        await ctx.__aexit__(None, None, None)
+                                    except Exception:
+                                        pass
+                                    logger.info(
+                                        f"Closed unclaimed handoff upstream for stream {sid}"
+                                    )
+
+                            asyncio.ensure_future(_cleanup_handoff())
+                            # Prevent the outer finally from signaling again
+                            stream_context = None
+                        elif stream_context is not None:
+                            try:
+                                await stream_context.__aexit__(None, None, None)
+                                logger.info(
+                                    f"Provider connection closed for client {client_id}"
+                                )
+                            except Exception as close_error:
+                                logger.warning(f"Error closing response: {close_error}")
+
+                # Primary reader is exiting — signal all subscribers to stop.
+                # They will get a None sentinel and their media player will reconnect,
+                # at which point one of them will become the new primary.
+                self._signal_subscribers_end(stream_id)
+
+                # Update final stats (add any remaining bytes not yet counted)
+                bytes_remaining = bytes_served - last_stats_update
+                if bytes_remaining > 0:
+                    if client_id in self.clients:
+                        self.clients[client_id].bytes_served += bytes_remaining
+                        self.clients[client_id].last_access = datetime.now(timezone.utc)
+
+                    if stream_id in self.streams:
+                        self.streams[stream_id].total_bytes_served += bytes_remaining
+                        self.streams[stream_id].last_access = datetime.now(timezone.utc)
+
+                    self._stats.total_bytes_served += bytes_remaining
+
+                # For VOD ranges that ended naturally (upstream finished serving bytes),
+                # keep the client registered so subsequent seek requests from the same
+                # client (Kodi file-size probe → actual seek → etc.) can reuse it without
+                # re-registration gaps.  The periodic cleanup will remove truly idle clients.
+                # For all other exits (client disconnect, error, cancel), do a full cleanup.
+                if natural_vod_completion:
+                    if connection_id in self.connection_cancel_events:
+                        del self.connection_cancel_events[connection_id]
+                    if (
+                        client_id in self.clients
+                        and self.clients[client_id].active_connection_id
+                        == connection_id
+                    ):
+                        self.clients[client_id].active_connection_id = None
+                    logger.info(
+                        f"VOD range served naturally for client {client_id} (connection {connection_id}), "
+                        f"client kept registered for potential seek requests"
+                    )
+                else:
+                    # Cleanup client - pass connection_id to prevent race conditions
+                    await self.cleanup_client(client_id, connection_id)
             finally:
                 # Safety net: signal subscribers no matter how the generator
                 # exits (GC, GeneratorExit, exception).  This is idempotent —
