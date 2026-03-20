@@ -45,8 +45,9 @@ def get_ffmpeg_version() -> Optional[str]:
 
 def get_content_type(url: str) -> str:
     """Determine content type based on URL extension"""
-    path = urlparse(url).path.lower()
-    if path.endswith(".ts") or url.lower().endswith("?profile=pass"):
+    # Split off query string before checking extension
+    path = str(url).split("?")[0].lower()
+    if path.endswith(".ts") or str(url).lower().endswith("?profile=pass"):
         return "video/mp2t"
     elif path.endswith(".m3u8"):
         return "application/vnd.apple.mpegurl"
@@ -64,14 +65,15 @@ def get_content_type(url: str) -> str:
 
 def is_direct_stream(url: str) -> bool:
     """Check if URL is a direct stream (not HLS playlist)"""
-    path = urlparse(url).path.lower()
+    # Split off query string before checking extension
+    path = str(url).split("?")[0].lower()
     # M3U8 URLs are always HLS, even if /live/ appears in the path
     if path.endswith(".m3u8"):
         return False
     return (
         path.endswith((".ts", ".mp4", ".mkv", ".webm", ".avi"))
-        or url.lower().endswith("?profile=pass")
-        or "/live/" in url
+        or str(url).lower().endswith("?profile=pass")
+        or "/live/" in str(url)
     )
 
 
