@@ -520,6 +520,7 @@ class StreamManager:
         # Preserve cumulative stats so the stream monitor shows accurate totals
         # (variant streams always have 0 clients since clients register with
         # the parent, so they get recycled on every playlist refresh).
+        was_recycled = False
         recycled_bytes = 0
         recycled_segments = 0
         recycled_created_at = None
@@ -592,10 +593,12 @@ class StreamManager:
             self.stream_clients[stream_id] = set()
 
             # Restore cumulative stats from recycled stream
-            if recycled_bytes or recycled_segments:
+            if was_recycled:
+                assert (
+                    recycled_created_at is not None
+                )  # always set when was_recycled is True
                 self.streams[stream_id].total_bytes_served = recycled_bytes
                 self.streams[stream_id].total_segments_served = recycled_segments
-            if recycled_created_at:
                 self.streams[stream_id].created_at = recycled_created_at
 
             # Only count non-variant streams in stats
